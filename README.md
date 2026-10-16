@@ -12,12 +12,14 @@ to a workspace directory can be benchmarked; the reference CLI is one such comma
 ```
 
 Scores here are comparable across runs of this harness, not to published LongMemEval
-results (the judge differs). Comparisons are claimed only within one report.
+results (the sample and the agent differ, and by default the judge). Comparisons are claimed
+only within one report.
 
 ## Running
 
-Every phase that calls a model refuses to start without `ANTHROPIC_API_KEY`, and prints
-a plan (questions by type, sessions to replay, estimated model calls) before its first
+Every phase that calls a model refuses to start without the API key of the provider it
+calls (`ANTHROPIC_API_KEY` by default; see [Providers](#providers)), and prints a plan
+(models, questions by type, sessions to replay, estimated model calls) before its first
 call. `--dry-run` prints the plan and exits without a key.
 
 ```sh
@@ -64,9 +66,68 @@ To compare two builds of one implementation, ingest once and answer with both:
 | `--repeats` | `1` | answers per question per variant, for variance |
 | `--spec-tools-only` | off | withhold every tool outside the DKF specification while answering |
 | `--baselines` | | `no-memory`, `full-context`, `bm25` (`--bm25-k`, default 3) |
-| `--model`, `--effort`, `--max-turns` | `claude-opus-5-5`, `medium`, `30` | ingest and answer model |
+| `--model`, `--effort`, `--max-turns`, `--max-tokens` | `claude-opus-5-5`, `medium`, `30`, `16000` | ingest and answer model |
+| `--provider`, `--base-url`, `--api-key-env`, `--extra-body` | `anthropic` | ingest and answer endpoint ([Providers](#providers)) |
 | `--judge-model`, `--judge-effort` | `claude-opus-5-5`, `low` | judge |
+| `--judge-provider`, `--judge-base-url`, `--judge-api-key-env`, `--judge-extra-body` | `anthropic` | judge endpoint |
+| `--judge-label` | the judge model id | names a judge's verdicts in the run; `report` scores with it |
 | `--dry-run` | | print the plan only |
+
+## Providers
+
+Each model role (the agent, which ingests and answers, and the judge) names a provider:
+
+- `anthropic` (default): the Anthropic Messages API, key `ANTHROPIC_API_KEY`. `--effort` is
+  sent as `output_config.effort`; the system prompt and tools are marked for prompt caching.
+- `openai`: any OpenAI-compatible Chat Completions endpoint at `--base-url` (default
+  `https://api.openai.com/v1`), key `OPENAI_API_KEY`. Tools go as functions with the
+  server's schema as `parameters`, unchanged, and strict mode off. `--effort` is sent as
+  `reasoning_effort` only when given, since non-reasoning models reject it; the judge sends
+  `temperature: 0`, as LongMemEval does, unless `--judge-effort` is given. `--max-tokens` is
+  sent as `max_completion_tokens`; `--max-tokens 0` sends none, for servers that want
+  `max_tokens` through `--extra-body` instead.
+
+`--api-key-env` / `--judge-api-key-env` name another variable holding the key. A local server
+that needs no key still needs that variable set to something, which keeps running a model
+an explicit choice. `--extra-body` / `--judge-extra-body` take a JSON object merged into
+every request of that role unchanged; the harness knows no router's fields.
+
+```sh
+# Claude agent, GPT-4o judge (LongMemEval's published judge).
+./dist/particulars-bench judge --run results/first --judge-provider openai --judge-model gpt-4o
+
+# An open-weight agent through OpenRouter, pinned to one upstream with no fallbacks.
+export OPENROUTER_API_KEY=...
+./dist/particulars-bench answer --run results/or --impl "$CLI" \
+    --provider openai --base-url https://openrouter.ai/api/v1 --api-key-env OPENROUTER_API_KEY \
+    --model qwen/qwen3-235b-a22b \
+    --extra-body '{"provider": {"order": ["<upstream>"], "allow_fallbacks": false}}'
+
+# A local vLLM or Ollama server.
+export LOCAL_KEY=none
+./dist/particulars-bench answer --run results/local --impl "$CLI" \
+    --provider openai --base-url http://localhost:11434/v1 --api-key-env LOCAL_KEY --model llama3.1:70b
+```
+
+Each judge's verdicts are kept apart (`judgments/<judge-label>/<variant>.jsonl`), so re-judging
+a run with another judge adds to it. `report` scores with one primary judge (`--judge-label`,
+or the only one) and reports every other judge's agreement with it per question type.
+
+Caveats:
+
+- **Routers.** One model id at a router can be served by different upstreams, with different
+  weights, quantisation, or templates. Pin the upstream with `--extra-body` and disable
+  fallbacks. When a response names its upstream (OpenRouter's top-level `provider` field), each
+  call records it; the report lists each role's upstreams and warns when there was more than one.
+- **Tool calling varies.** Arguments that are not valid JSON go back to the model as an error
+  tool result and count as a call of that tool and a tool error. A tool call written as text
+  counts as no call. Both show in the tool-call counts as findings, not crashes.
+- **Tokens.** Token counts come from each provider's tokeniser. The report labels token figures
+  approximate when variants used different providers. On `openai`, input tokens include cached
+  tokens (also reported separately), output tokens include reasoning tokens, and cache writes
+  are zero.
+- **Cache keys.** The ingest cache key includes the provider, base URL, and extra body when they
+  differ from the Anthropic defaults, so Anthropic keys are as before providers existed.
 
 ## What an implementation must provide
 
@@ -95,7 +156,8 @@ on macOS, `~/.cache/particulars-bench` on Linux):
   [`xiaowu0162/longmemeval-cleaned`](https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned)
   at a pinned revision and verified against pinned SHA-256s. Never written inside this repository.
 - `longmemeval/workspaces/<key>/` — ingested workspaces. The key hashes the dataset variant and
-  checksum, the question id, the ingest model settings, the ingest prompt, and the ingest
+  checksum, the question id, the ingest model settings (provider, base URL, extra body, model, and
+parameters), the ingest prompt, and the ingest
   implementation's `serverInfo`, `initialize` instructions, and `tools/list` on an empty workspace
   (its path and id replaced by placeholders). `manifest.json`, written last, lists every file's
   SHA-256; an entry is reused only if every file matches.
@@ -107,7 +169,8 @@ under the MIT License, Copyright (c) 2024 Di Wu; the dataset is published under 
 The grading prompts in `prompts/judge-*.md` are reproduced verbatim from
 `src/evaluation/evaluate_qa.py` at commit `9e0b455`, which the MIT License permits with this
 notice. As there, a verdict is correct when the judge's reply contains "yes". The published
-results use GPT-4o as judge; this harness uses a recorded Claude model with the same prompts.
+results use GPT-4o as judge; this harness defaults to a recorded Claude model with the same
+prompts, and can judge with GPT-4o (`--judge-provider openai --judge-model gpt-4o`).
 
 ## Development
 

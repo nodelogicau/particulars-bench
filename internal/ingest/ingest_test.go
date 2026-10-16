@@ -48,7 +48,7 @@ func question(t *testing.T) dataset.Question {
 	return qs[0]
 }
 
-func ingester(t *testing.T, m agent.Model, env ...string) *ingest.Ingester {
+func ingester(t *testing.T, m agent.Provider, env ...string) *ingest.Ingester {
 	t.Helper()
 	im := impl.Impl{Label: "fake", Command: fakeserver.Command(env...)}
 	probe, err := ingest.ProbeImpl(context.Background(), im, t.TempDir())

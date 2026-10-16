@@ -4,6 +4,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -25,25 +26,35 @@ import (
 	"github.com/nodelogicau/particulars-bench/internal/spec"
 )
 
-// APIKeyVar must be set for any phase that calls a model.
-const APIKeyVar = "ANTHROPIC_API_KEY"
+// API key variables by provider, used unless a role names another.
+var apiKeyVars = map[string]string{
+	agent.ProviderAnthropic: "ANTHROPIC_API_KEY",
+	agent.ProviderOpenAI:    "OPENAI_API_KEY",
+}
+
+// Efforts each provider accepts: Anthropic output_config.effort, OpenAI
+// reasoning_effort. An empty effort is not sent.
+var efforts = map[string][]string{
+	agent.ProviderAnthropic: {"low", "medium", "high", "xhigh", "max"},
+	agent.ProviderOpenAI:    {"none", "minimal", "low", "medium", "high", "xhigh", "max"},
+}
 
 // Deps are the command's connections to the outside world.
 type Deps struct {
 	Stdout, Stderr io.Writer
 	Getenv         func(string) string
-	// NewModel returns the model client; it is called only after the plan
-	// is printed and only when a phase will call a model.
-	NewModel func() agent.Model
-	Now      func() time.Time
+	// NewProvider returns a role's model provider; it is called only after
+	// the plan is printed and only when a phase will call a model.
+	NewProvider func(s agent.Settings, apiKey string) (agent.Provider, error)
+	Now         func() time.Time
 }
 
-// DefaultDeps uses the process environment and the Anthropic API.
+// DefaultDeps uses the process environment and the providers' APIs.
 func DefaultDeps() Deps {
 	return Deps{
 		Stdout: os.Stdout, Stderr: os.Stderr, Getenv: os.Getenv,
-		NewModel: func() agent.Model { return agent.NewAnthropic() },
-		Now:      time.Now,
+		NewProvider: agent.New,
+		Now:         time.Now,
 	}
 }
 
@@ -59,8 +70,10 @@ Phases:
   judge    grade a run's answers with LongMemEval's per-type prompts
   report   write report.json (bench-report/1) and report.md for a run
 
-ingest, answer, and judge call a model and refuse to start without ANTHROPIC_API_KEY,
-except with --dry-run, which prints the plan and exits.
+ingest, answer, and judge call a model and refuse to start when the API key
+variable of the provider they call is unset (ANTHROPIC_API_KEY for anthropic,
+OPENAI_API_KEY for openai, or the variable --api-key-env / --judge-api-key-env
+names), except with --dry-run, which prints the plan and exits.
 
 Run 'particulars-bench <phase> -h' for flags.
 `
@@ -99,9 +112,13 @@ func Run(ctx context.Context, args []string, d Deps) int {
 		fmt.Fprintf(d.Stderr, "particulars-bench %s: %v\n", phase, err)
 		return 2
 	}
-	if phase != "report" && !o.dryRun && d.Getenv(APIKeyVar) == "" {
-		fmt.Fprintf(d.Stderr, "particulars-bench %s: %s is not set; refusing to start a phase that calls a model (use --dry-run to see the plan)\n", phase, APIKeyVar)
-		return 1
+	if !o.dryRun {
+		for _, r := range o.roles() {
+			if d.Getenv(r.keyEnv) == "" {
+				fmt.Fprintf(d.Stderr, "particulars-bench %s: %s is not set; refusing to start a phase that calls a model (use --dry-run to see the plan)\n", phase, r.keyEnv)
+				return 1
+			}
+		}
 	}
 	if err := fn(ctx, o, d); err != nil {
 		fmt.Fprintf(d.Stderr, "particulars-bench %s: %v\n", phase, err)
@@ -124,6 +141,9 @@ type options struct {
 	resultsDir    string
 	agent         agent.Settings
 	judge         agent.Settings
+	agentKeyEnv   string
+	judgeKeyEnv   string
+	judgeLabel    string
 	baselines     []string
 	bm25K         int
 	// set names the flags given explicitly.
@@ -146,6 +166,7 @@ func parseFlags(phase string, args []string, stderr io.Writer) (*options, error)
 	o := &options{phase: phase}
 	var impls listFlag
 	var ingestImpl, types, ids, baselines string
+	var agentProvider, agentExtra, judgeProvider, judgeExtra string
 	fs.Var(&impls, "impl", "implementation under test, `label='command … {workspace} …'` (repeatable)")
 	fs.StringVar(&ingestImpl, "ingest-impl", "", "implementation that ingests for the answer phase, `label='command'` (default: the only --impl)")
 	fs.StringVar(&o.variant, "variant", "oracle", "dataset variant: "+strings.Join(dataset.VariantNames(), ", "))
@@ -164,8 +185,17 @@ func parseFlags(phase string, args []string, stderr io.Writer) (*options, error)
 	fs.StringVar(&o.agent.Effort, "effort", "medium", "effort for ingest and answers")
 	fs.Int64Var(&o.agent.MaxTokens, "max-tokens", 16000, "max_tokens per model call")
 	fs.IntVar(&o.agent.MaxTurns, "max-turns", 30, "model calls per agent loop (one session, or one answer)")
+	fs.StringVar(&agentProvider, "provider", agent.ProviderAnthropic, "provider for ingest and answers: "+strings.Join(agent.Providers, ", "))
+	fs.StringVar(&o.agent.BaseURL, "base-url", "", "API base URL for ingest and answers (openai default: "+agent.DefaultOpenAIBaseURL+")")
+	fs.StringVar(&o.agentKeyEnv, "api-key-env", "", "`variable` holding the API key for ingest and answers (default: ANTHROPIC_API_KEY or OPENAI_API_KEY by provider)")
+	fs.StringVar(&agentExtra, "extra-body", "", "JSON object merged into every ingest and answer request body")
 	fs.StringVar(&o.judge.Model, "judge-model", "claude-opus-5-5", "judge model")
-	fs.StringVar(&o.judge.Effort, "judge-effort", "low", "judge effort")
+	fs.StringVar(&o.judge.Effort, "judge-effort", "low", "judge effort (openai: sent only when given; otherwise temperature 0)")
+	fs.StringVar(&judgeProvider, "judge-provider", agent.ProviderAnthropic, "judge provider: "+strings.Join(agent.Providers, ", "))
+	fs.StringVar(&o.judge.BaseURL, "judge-base-url", "", "judge API base URL (openai default: "+agent.DefaultOpenAIBaseURL+")")
+	fs.StringVar(&o.judgeKeyEnv, "judge-api-key-env", "", "`variable` holding the judge's API key (default: by provider)")
+	fs.StringVar(&judgeExtra, "judge-extra-body", "", "JSON object merged into every judge request body")
+	fs.StringVar(&o.judgeLabel, "judge-label", "", "name of a judge's verdicts in the run; judge writes and report reads them (default: the judge model id)")
 	fs.StringVar(&baselines, "baselines", "", "answer phase: comma-separated baselines: "+strings.Join(answer.BaselineNames, ", "))
 	fs.IntVar(&o.bm25K, "bm25-k", 3, "sessions the bm25 baseline retrieves")
 	if err := fs.Parse(args); err != nil {
@@ -177,6 +207,23 @@ func parseFlags(phase string, args []string, stderr io.Writer) (*options, error)
 	o.set = map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { o.set[f.Name] = true })
 	o.judge.MaxTokens, o.judge.MaxTurns = 4000, 1
+	if err := configureRole("", agentProvider, agentExtra, &o.agent, &o.agentKeyEnv, o.set); err != nil {
+		return nil, err
+	}
+	if err := configureRole("judge-", judgeProvider, judgeExtra, &o.judge, &o.judgeKeyEnv, o.set); err != nil {
+		return nil, err
+	}
+	if o.judge.Provider == agent.ProviderOpenAI && o.judge.Effort == "" {
+		// LongMemEval grades at temperature 0; reasoning models reject it.
+		zero := 0.0
+		o.judge.Temperature = &zero
+	}
+	if o.judgeLabel == "" {
+		o.judgeLabel = strings.Trim(labelChars.ReplaceAllString(o.judge.Model, "-"), "-._")
+	}
+	if !labelRE.MatchString(o.judgeLabel) {
+		return nil, fmt.Errorf("--judge-label %q: use letters, digits, '.', '_', '-'", o.judgeLabel)
+	}
 	seen := map[string]bool{}
 	for _, s := range impls {
 		im, err := impl.Parse(s)
@@ -220,6 +267,73 @@ func parseFlags(phase string, args []string, stderr io.Writer) (*options, error)
 	}
 	return o, nil
 }
+
+// role is a model role a phase calls.
+type role struct {
+	name     string
+	settings agent.Settings
+	keyEnv   string
+}
+
+// roles returns the model roles the phase calls.
+func (o *options) roles() []role {
+	switch o.phase {
+	case "ingest", "answer":
+		return []role{{"agent", o.agent, o.agentKeyEnv}}
+	case "judge":
+		return []role{{"judge", o.judge, o.judgeKeyEnv}}
+	}
+	return nil
+}
+
+// provider returns the provider for a role, keyed from the environment.
+func provider(d Deps, r role) (agent.Provider, error) {
+	return d.NewProvider(r.settings, d.Getenv(r.keyEnv))
+}
+
+// configureRole validates a role's provider flags and applies the provider's
+// defaults: on openai the effort is sent only when given and the base URL
+// defaults to OpenAI's; on anthropic the provider field stays empty so that
+// recorded settings and cache keys are as before providers existed.
+func configureRole(prefix, providerName, extraBody string, s *agent.Settings, keyEnv *string, set map[string]bool) error {
+	if _, ok := efforts[providerName]; !ok {
+		return fmt.Errorf("--%sprovider %q: use one of %v", prefix, providerName, agent.Providers)
+	}
+	if providerName == agent.ProviderOpenAI {
+		s.Provider = providerName
+		if !set[prefix+"effort"] {
+			s.Effort = ""
+		}
+		if s.BaseURL == "" {
+			s.BaseURL = agent.DefaultOpenAIBaseURL
+		}
+	}
+	s.BaseURL = strings.TrimRight(s.BaseURL, "/")
+	if s.Effort != "" && !contains(efforts[providerName], s.Effort) {
+		return fmt.Errorf("--%seffort %q: %s accepts %v", prefix, s.Effort, providerName, efforts[providerName])
+	}
+	if extraBody != "" {
+		if err := json.Unmarshal([]byte(extraBody), &s.ExtraBody); err != nil || s.ExtraBody == nil {
+			return fmt.Errorf("--%sextra-body: not a JSON object: %s", prefix, extraBody)
+		}
+	}
+	if *keyEnv == "" {
+		*keyEnv = apiKeyVars[providerName]
+	}
+	return nil
+}
+
+func contains(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
+// labelChars matches the characters a label cannot hold.
+var labelChars = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 
 func split(s string) []string {
 	var out []string

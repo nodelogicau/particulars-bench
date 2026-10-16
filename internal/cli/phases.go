@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -28,6 +29,9 @@ func printPlan(w io.Writer, o *options, l *loaded, ingestImpl *impl.Impl, answer
 	fmt.Fprintf(w, "Plan (%s)\n", o.phase)
 	fmt.Fprintf(w, "  dataset: %s (%s, sha256 %s)\n", m.Dataset.Variant, m.Dataset.File, m.Dataset.SHA256)
 	fmt.Fprintf(w, "  seed %d, %d per type; %d questions\n", m.Selection.Seed, m.Selection.PerType, len(l.questions))
+	for _, r := range o.roles() {
+		fmt.Fprintf(w, "  %s model: %s\n", r.name, describeRole(r))
+	}
 	byStratum := map[string][2]int{}
 	sessions := 0
 	for _, q := range l.questions {
@@ -58,8 +62,34 @@ func printPlan(w io.Writer, o *options, l *loaded, ingestImpl *impl.Impl, answer
 		}
 	}
 	if judgeAnswers > 0 {
-		fmt.Fprintf(w, "  judge: %d model calls (%s)\n", judgeAnswers, o.judge.Model)
+		fmt.Fprintf(w, "  judge %s: %d model calls (%s)\n", o.judgeLabel, judgeAnswers, o.judge.Model)
 	}
+}
+
+// describeRole names a role's provider, model, endpoint, parameters, and key
+// variable.
+func describeRole(r role) string {
+	s := r.settings
+	base := s.BaseURL
+	if base == "" {
+		base = "SDK default"
+	}
+	var params []string
+	if s.Effort != "" {
+		params = append(params, "effort "+s.Effort)
+	}
+	if s.Temperature != nil {
+		params = append(params, fmt.Sprintf("temperature %g", *s.Temperature))
+	}
+	if len(s.ExtraBody) > 0 {
+		b, _ := json.Marshal(s.ExtraBody)
+		params = append(params, "extra body "+string(b))
+	}
+	out := fmt.Sprintf("%s %s at %s, key %s", s.ProviderName(), s.Model, base, r.keyEnv)
+	if len(params) > 0 {
+		out += " (" + strings.Join(params, ", ") + ")"
+	}
+	return out
 }
 
 func isBaseline(label string) bool {
@@ -82,7 +112,7 @@ func cacheRoot() (ingest.Cache, error) {
 // ingestAll ensures every question is ingested, recording each in the run's
 // ingest stream, and returns the manifests by question id (absent on
 // failure) and failures by question id.
-func ingestAll(ctx context.Context, o *options, d Deps, l *loaded, im impl.Impl, m agent.Model, tmp string) (map[string]*ingest.Manifest, map[string]string, error) {
+func ingestAll(ctx context.Context, o *options, d Deps, l *loaded, im impl.Impl, m agent.Provider, tmp string) (map[string]*ingest.Manifest, map[string]string, error) {
 	cache, err := cacheRoot()
 	if err != nil {
 		return nil, nil, err
@@ -165,7 +195,11 @@ func runIngest(ctx context.Context, o *options, d Deps) error {
 		return err
 	}
 	defer func() { _ = os.RemoveAll(tmp) }()
-	_, failures, err := ingestAll(ctx, o, d, l, *im, d.NewModel(), tmp)
+	m, err := provider(d, o.roles()[0])
+	if err != nil {
+		return err
+	}
+	_, failures, err := ingestAll(ctx, o, d, l, *im, m, tmp)
 	if err != nil {
 		return err
 	}
@@ -218,7 +252,10 @@ func runAnswer(ctx context.Context, o *options, d Deps) error {
 		return err
 	}
 	defer func() { _ = os.RemoveAll(tmp) }()
-	m := d.NewModel()
+	m, err := provider(d, o.roles()[0])
+	if err != nil {
+		return err
+	}
 
 	var manifests map[string]*ingest.Manifest
 	var ingestFailures map[string]string
@@ -375,9 +412,12 @@ func runJudge(ctx context.Context, o *options, d Deps) error {
 	if o.dryRun {
 		return nil
 	}
-	m := d.NewModel()
+	m, err := provider(d, o.roles()[0])
+	if err != nil {
+		return err
+	}
 	for _, p := range work {
-		stream := "judgments/" + p.variant
+		stream := run.JudgmentStream(o.judgeLabel, p.variant)
 		if err := l.dir.Reset(stream); err != nil {
 			return err
 		}
@@ -385,7 +425,7 @@ func runJudge(ctx context.Context, o *options, d Deps) error {
 		var appendErr error
 		forEach(ctx, len(p.answers), o.concurrency, func(i int) {
 			a := p.answers[i]
-			j := run.Judgment{Variant: a.Variant, QuestionID: a.QuestionID, Repeat: a.Repeat, Settings: o.judge}
+			j := run.Judgment{Judge: o.judgeLabel, Variant: a.Variant, QuestionID: a.QuestionID, Repeat: a.Repeat, Settings: o.judge}
 			q, ok := byID[a.QuestionID]
 			if !ok {
 				return
@@ -420,7 +460,11 @@ func runReport(ctx context.Context, o *options, d Deps) error {
 	if err != nil {
 		return err
 	}
-	r, err := report.Build(l.dir, l.meta, l.questions, d.Now())
+	primary, err := primaryJudge(o, l.dir)
+	if err != nil {
+		return err
+	}
+	r, err := report.Build(l.dir, l.meta, l.questions, d.Now(), primary)
 	if err != nil {
 		return err
 	}
@@ -436,6 +480,26 @@ func runReport(ctx context.Context, o *options, d Deps) error {
 	fmt.Fprint(d.Stdout, md)
 	fmt.Fprintf(d.Stderr, "wrote %s and %s\n", jsonPath, mdPath)
 	return nil
+}
+
+// primaryJudge picks the judge whose verdicts score the report: the one
+// --judge-label or --judge-model names, else the only judge, else the
+// default judge model's when present.
+func primaryJudge(o *options, d *run.Dir) (string, error) {
+	judges, err := d.Judges()
+	if err != nil {
+		return "", err
+	}
+	if len(judges) == 0 || contains(judges, o.judgeLabel) {
+		return o.judgeLabel, nil
+	}
+	if o.set["judge-label"] || o.set["judge-model"] {
+		return "", fmt.Errorf("run %s has no verdicts from judge %q (judges: %v)", d.Path, o.judgeLabel, judges)
+	}
+	if len(judges) == 1 {
+		return judges[0], nil
+	}
+	return "", fmt.Errorf("run %s has several judges %v: choose the primary one with --judge-label", d.Path, judges)
 }
 
 func firstLine(s string) string {

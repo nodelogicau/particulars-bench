@@ -73,12 +73,12 @@ func TestBuildAndMarkdown(t *testing.T) {
 				continue
 			}
 			j := run.Judgment{Variant: label, QuestionID: q.ID, Settings: agent.Settings{Model: "judge"}, Verdict: judge.Verdict{Correct: i%2 == 0, Raw: "yes"}}
-			if err := d.Append("judgments/"+label, j); err != nil {
+			if err := d.Append(run.JudgmentStream("judge", label), j); err != nil {
 				t.Fatal(err)
 			}
 		}
 	}
-	r, err := report.Build(d, meta, qs, time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC))
+	r, err := report.Build(d, meta, qs, time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC), "judge")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,6 +113,65 @@ func TestBuildAndMarkdown(t *testing.T) {
 	for _, want := range []string{"Tool calls / answer", "`topics_list` 9", "withheld (`--spec-tools-only`)", "Infrastructure failures"} {
 		if !strings.Contains(md, want) {
 			t.Errorf("markdown lacks %q", want)
+		}
+	}
+}
+
+func TestProvidersInReport(t *testing.T) {
+	qs, err := dataset.Parse(testutil.FixtureJSON(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := run.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := run.Meta{Dataset: run.Dataset{Variant: "fixture"}}
+	for _, q := range qs {
+		meta.QuestionIDs = append(meta.QuestionIDs, q.ID)
+	}
+	router := agent.Settings{Provider: "openai", BaseURL: "https://openrouter.ai/api/v1", Model: "x/y",
+		ExtraBody: map[string]any{"provider": map[string]any{"order": []any{"a"}}}}
+	for _, v := range []run.Variant{
+		{Label: "claude", Kind: "baseline", Settings: agent.Settings{Model: "claude-opus-5-5", Effort: "medium"}},
+		{Label: "routed", Kind: "baseline", Settings: router},
+	} {
+		if err := d.WriteVariant(v); err != nil {
+			t.Fatal(err)
+		}
+		for i, q := range qs {
+			u := agent.Usage{Calls: 1}
+			if v.Label == "routed" {
+				up := "A"
+				if i%2 == 1 {
+					up = "B"
+				}
+				u.PerCall = []agent.CallUsage{{Upstream: up}}
+			}
+			if err := d.Append("answers/"+v.Label, run.Answer{Variant: v.Label, QuestionID: q.ID, Output: answer.Output{Usage: u}}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	r, err := report.Build(d, meta, qs, time.Now(), "judge")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.TokensApproximate || len(r.Roles) != 2 {
+		t.Fatalf("approximate %t, roles %+v", r.TokensApproximate, r.Roles)
+	}
+	routed := r.Roles[1]
+	if routed.Role != "answer" || routed.Settings.BaseURL != router.BaseURL || strings.Join(routed.Upstreams, ",") != "A,B" || routed.Variants[0] != "routed" {
+		t.Errorf("routed role %+v", routed)
+	}
+	md := report.Markdown(r)
+	for _, want := range []string{
+		"Token figures are approximate",
+		"the answer model `x/y` was served by more than one upstream (A, B)",
+		"`x/y` via openai at `https://openrouter.ai/api/v1` (extra body",
+	} {
+		if !strings.Contains(md, want) {
+			t.Errorf("markdown lacks %q:\n%s", want, md)
 		}
 	}
 }

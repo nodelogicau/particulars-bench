@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -27,23 +28,33 @@ func TestMain(m *testing.M) {
 
 type env struct {
 	stdout, stderr bytes.Buffer
-	key            string
-	model          agent.Model
-	modelsMade     int
+	// key is ANTHROPIC_API_KEY; vars holds any other variable.
+	key        string
+	vars       map[string]string
+	model      agent.Provider
+	modelsMade int
+	// made records each provider's settings and API key.
+	made []made
+}
+
+type made struct {
+	settings agent.Settings
+	key      string
 }
 
 func (e *env) deps() cli.Deps {
 	return cli.Deps{
 		Stdout: &e.stdout, Stderr: &e.stderr,
 		Getenv: func(k string) string {
-			if k == cli.APIKeyVar {
+			if k == "ANTHROPIC_API_KEY" {
 				return e.key
 			}
-			return ""
+			return e.vars[k]
 		},
-		NewModel: func() agent.Model {
+		NewProvider: func(s agent.Settings, key string) (agent.Provider, error) {
 			e.modelsMade++
-			return e.model
+			e.made = append(e.made, made{s, key})
+			return e.model, nil
 		},
 		Now: func() time.Time { return time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC) },
 	}
@@ -178,6 +189,22 @@ func TestPipeline(t *testing.T) {
 	if code := e.run(append([]string{"judge"}, common...)...); code != 0 {
 		t.Fatalf("judge: %d\n%s", code, e.stderr.String())
 	}
+	// A second judge on another provider writes beside the first.
+	e.vars = map[string]string{"OPENAI_API_KEY": "sk"}
+	e.made = nil
+	if code := e.run(append([]string{"judge", "--judge-provider", "openai", "--judge-model", "gpt-4o"}, common...)...); code != 0 {
+		t.Fatalf("second judge: %d\n%s", code, e.stderr.String())
+	}
+	js := e.made[0].settings
+	if js.Provider != "openai" || js.Effort != "" || js.Temperature == nil || *js.Temperature != 0 || e.made[0].key != "sk" {
+		t.Errorf("openai judge settings %+v", js)
+	}
+	for _, judge := range []string{"claude-opus-5-5", "gpt-4o"} {
+		if _, err := os.Stat(filepath.Join(runDir, "judgments", judge, "fake.jsonl")); err != nil {
+			t.Errorf("judge %s verdicts: %v", judge, err)
+		}
+	}
+
 	if code := e.run(append([]string{"report"}, common...)...); code != 0 {
 		t.Fatalf("report: %d\n%s", code, e.stderr.String())
 	}
@@ -196,6 +223,10 @@ func TestPipeline(t *testing.T) {
 	}
 	if r.Schema != "bench-report/1" || r.DKFFormat != "dkf/0.1" || len(r.QuestionIDs) != 5 || r.Ingest.Questions != 5 {
 		t.Errorf("report header: schema %s dkf %s questions %d ingest %+v", r.Schema, r.DKFFormat, len(r.QuestionIDs), r.Ingest)
+	}
+	if r.JudgeLabel != "claude-opus-5-5" || len(r.OtherJudges) != 1 || r.OtherJudges[0].Judge != "gpt-4o" ||
+		r.OtherJudges[0].Agreement[report.OverallRow] != (report.Agreement{N: 30, Agree: 30, Rate: 1}) {
+		t.Errorf("judges: primary %q, others %+v", r.JudgeLabel, r.OtherJudges)
 	}
 	if r.Ingest.MeanOnSessionDate == nil || *r.Ingest.MeanOnSessionDate != 1 {
 		t.Errorf("ingest metrics %+v", r.Ingest)
@@ -227,5 +258,62 @@ func TestPipeline(t *testing.T) {
 	q := r.Questions[0]
 	if q.Ingest == nil || q.Outcomes["fake"][0].Tokens["ingest"].Input == 0 || q.Outcomes["fake"][0].Tokens["judge"].Input == 0 {
 		t.Errorf("per-question tokens by phase missing: %+v", q.Outcomes["fake"])
+	}
+}
+
+func TestProviderKeys(t *testing.T) {
+	testutil.InstallFixture(t, 1)
+	results := filepath.Join(t.TempDir(), "results")
+	common := []string{"--variant", "fixture", "--results", results}
+
+	// An openai judge needs OPENAI_API_KEY even when ANTHROPIC_API_KEY is set.
+	e := &env{key: "anthropic"}
+	code := e.run(append([]string{"judge", "--judge-provider", "openai", "--judge-model", "gpt-4o"}, common...)...)
+	if code == 0 || !strings.Contains(e.stderr.String(), "OPENAI_API_KEY is not set") || e.modelsMade != 0 {
+		t.Errorf("openai judge without OPENAI_API_KEY: exit %d, stderr %q", code, e.stderr.String())
+	}
+
+	// A named router variable replaces OPENAI_API_KEY and is what is sent.
+	e = &env{vars: map[string]string{"OPENROUTER_API_KEY": "sk-or"}, model: pipelineModel()}
+	code = e.run(append([]string{"answer", "--baselines", "no-memory", "--provider", "openai",
+		"--base-url", "https://openrouter.ai/api/v1/", "--api-key-env", "OPENROUTER_API_KEY", "--model", "x/y",
+		"--extra-body", `{"provider":{"order":["x"],"allow_fallbacks":false}}`}, common...)...)
+	if code != 0 {
+		t.Fatalf("answer through a router: exit %d\n%s", code, e.stderr.String())
+	}
+	s := e.made[0].settings
+	if e.made[0].key != "sk-or" || s.Provider != "openai" || s.BaseURL != "https://openrouter.ai/api/v1" || s.Effort != "" || s.ExtraBody["provider"] == nil {
+		t.Errorf("router provider made with %+v, key %q", s, e.made[0].key)
+	}
+	if !strings.Contains(e.stdout.String(), "agent model: openai x/y at https://openrouter.ai/api/v1, key OPENROUTER_API_KEY") {
+		t.Errorf("plan lacks the role:\n%s", e.stdout.String())
+	}
+
+	// Anthropic-only settings are as before providers existed.
+	e = &env{key: "k", model: pipelineModel()}
+	if code := e.run(append([]string{"answer", "--baselines", "no-memory"}, common...)...); code != 0 {
+		t.Fatalf("anthropic answer: %d\n%s", code, e.stderr.String())
+	}
+	want := agent.Settings{Model: "claude-opus-5-5", Effort: "medium", MaxTokens: 16000, MaxTurns: 30}
+	if !reflect.DeepEqual(e.made[0].settings, want) || e.made[0].key != "k" {
+		t.Errorf("anthropic settings %+v", e.made[0].settings)
+	}
+}
+
+func TestProviderFlagValidation(t *testing.T) {
+	testutil.InstallFixture(t, 1)
+	results := filepath.Join(t.TempDir(), "results")
+	for _, bad := range [][]string{
+		{"--provider", "gemini"},
+		{"--extra-body", "[1]"},
+		{"--judge-extra-body", "{"},
+		{"--provider", "openai", "--effort", "turbo"},
+		{"--effort", "minimal"}, // an OpenAI effort, not an Anthropic one
+		{"--judge-label", "a/b"},
+	} {
+		e := &env{}
+		if code := e.run(append([]string{"answer", "--dry-run", "--baselines", "no-memory", "--variant", "fixture", "--results", results}, bad...)...); code != 2 {
+			t.Errorf("%v: exit %d, want 2 (%s)", bad, code, e.stderr.String())
+		}
 	}
 }

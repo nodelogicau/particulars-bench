@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go"
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/nodelogicau/particulars-bench/internal/agent"
 	"github.com/nodelogicau/particulars-bench/internal/testutil"
@@ -24,9 +24,9 @@ func (c *caller) Call(_ context.Context, name string, args json.RawMessage) (str
 	return "result of " + name, name == "fails", nil
 }
 
-var tools = []*mcp.Tool{
-	{Name: "knowledge_recall", Description: "Recall.", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}}}},
-	{Name: "fails", InputSchema: map[string]any{"type": "object"}},
+var tools = []agent.ToolDef{
+	{Name: "knowledge_recall", Description: "Recall.", Schema: map[string]any{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}}}},
+	{Name: "fails", Schema: map[string]any{"type": "object"}},
 }
 
 func TestRunForwardsAndCounts(t *testing.T) {
@@ -106,5 +106,54 @@ func TestRunProtocolErrorEndsLoop(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("protocol error swallowed")
+	}
+}
+
+// scripted is a Provider whose turns are fixed, for provider-neutral loop
+// behaviour.
+type scripted struct {
+	turns   []agent.Turn
+	results [][]agent.ToolResult
+}
+
+func (s *scripted) Start(agent.Settings, []string, string, []agent.ToolDef) (agent.Conversation, error) {
+	return s, nil
+}
+
+func (s *scripted) Send(context.Context) (agent.Turn, error) {
+	t := s.turns[0]
+	s.turns = s.turns[1:]
+	return t, nil
+}
+
+func (s *scripted) AddToolResults(r []agent.ToolResult) { s.results = append(s.results, r) }
+
+func TestRunInvalidArgumentsAreToolErrors(t *testing.T) {
+	p := &scripted{turns: []agent.Turn{
+		{More: true, ToolCalls: []agent.ToolCall{{ID: "1", Name: "knowledge_recall", Args: []byte(`{"query": "bi`)}}},
+		{Text: "red"},
+	}}
+	c := &caller{}
+	res, err := agent.Run(context.Background(), p, c, agent.Request{Settings: agent.Settings{MaxTurns: 5}, User: "Q", Tools: tools})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.calls) != 0 {
+		t.Errorf("invalid arguments reached the server: %v", c.calls)
+	}
+	if res.ToolCalls["knowledge_recall"] != 1 || res.ToolErrors != 1 || res.Text != "red" {
+		t.Errorf("result %+v", res)
+	}
+	if r := p.results[0][0]; r.ID != "1" || !r.IsError || !strings.Contains(r.Text, "invalid tool arguments") {
+		t.Errorf("tool result %+v", r)
+	}
+}
+
+func TestRunRefusalIsFailure(t *testing.T) {
+	m := &testutil.Model{Script: func(anthropic.MessageNewParams) testutil.Reply { return testutil.Reply{Refuse: true} }}
+	res, err := agent.Run(context.Background(), m, &caller{}, agent.Request{Settings: agent.Settings{Model: "m", MaxTurns: 3}, User: "Q"})
+	var refusal *agent.RefusalError
+	if !errors.As(err, &refusal) || res.Turns != 1 || res.Usage.Calls != 1 {
+		t.Errorf("refusal: err %v, result %+v", err, res)
 	}
 }
