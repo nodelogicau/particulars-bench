@@ -3,7 +3,9 @@
 package report
 
 import (
+	"encoding/json"
 	"math"
+	"slices"
 	"sort"
 	"time"
 
@@ -114,6 +116,36 @@ type IngestSummary struct {
 	Tokens            PhaseTokens `json:"tokens"`
 }
 
+// Role is one model role's configuration as sent, and the upstreams that
+// served its calls when the responses named them. A role whose settings
+// differ between variants appears once per distinct configuration.
+type Role struct {
+	// Role is "ingest", "answer", or "judge".
+	Role string `json:"role"`
+	// Judge labels a judge's verdicts.
+	Judge string `json:"judge,omitempty"`
+	// Variants are the answer variants with these settings.
+	Variants  []string       `json:"variants,omitempty"`
+	Settings  agent.Settings `json:"settings"`
+	Upstreams []string       `json:"upstreams"`
+}
+
+// Agreement is how often a judge's verdicts match the primary judge's on
+// the answers both graded.
+type Agreement struct {
+	N     int     `json:"n"`
+	Agree int     `json:"agree"`
+	Rate  float64 `json:"rate"`
+}
+
+// JudgeComparison compares another judge with the primary one, per type and
+// overall.
+type JudgeComparison struct {
+	Judge     string               `json:"judge"`
+	Settings  *agent.Settings      `json:"settings,omitempty"`
+	Agreement map[string]Agreement `json:"agreement"`
+}
+
 // Report is bench-report/1.
 type Report struct {
 	Schema        string            `json:"schema"`
@@ -125,19 +157,28 @@ type Report struct {
 	QuestionIDs   []string          `json:"question_ids"`
 	Strata        []string          `json:"strata"`
 	Judge         *agent.Settings   `json:"judge,omitempty"`
-	JudgePrompts  map[string]string `json:"judge_prompt_sha256"`
-	Ingest        IngestSummary     `json:"ingest"`
-	Variants      []VariantResult   `json:"variants"`
-	Questions     []Question        `json:"questions"`
+	// JudgeLabel names the primary judge, whose verdicts score the report.
+	JudgeLabel  string            `json:"judge_label,omitempty"`
+	OtherJudges []JudgeComparison `json:"other_judges,omitempty"`
+	Roles       []Role            `json:"roles"`
+	// TokensApproximate is set when variants used different providers,
+	// whose token counts come from different tokenisers.
+	TokensApproximate bool              `json:"tokens_approximate"`
+	JudgePrompts      map[string]string `json:"judge_prompt_sha256"`
+	Ingest            IngestSummary     `json:"ingest"`
+	Variants          []VariantResult   `json:"variants"`
+	Questions         []Question        `json:"questions"`
 }
 
-// Build assembles the report for a run.
-func Build(d *run.Dir, meta run.Meta, qs []dataset.Question, now time.Time) (*Report, error) {
+// Build assembles the report for a run, scored by the verdicts of the
+// primary judge.
+func Build(d *run.Dir, meta run.Meta, qs []dataset.Question, now time.Time, primary string) (*Report, error) {
 	r := &Report{
 		Schema: Schema, Date: now.UTC(), HarnessCommit: meta.HarnessCommit, DKFFormat: meta.DKFFormat,
 		Dataset: meta.Dataset, Selection: meta.Selection, QuestionIDs: meta.QuestionIDs,
-		JudgePrompts: map[string]string{},
+		JudgePrompts: map[string]string{}, JudgeLabel: primary, Roles: []Role{},
 	}
+	roles := &roleSet{}
 	for _, n := range []string{"judge-default", "judge-temporal-reasoning", "judge-knowledge-update", "judge-single-session-preference", "judge-abstention"} {
 		r.JudgePrompts[n] = prompts.Hash(n)
 	}
@@ -159,18 +200,30 @@ func Build(d *run.Dir, meta run.Meta, qs []dataset.Question, now time.Time) (*Re
 		return nil, err
 	}
 	r.Ingest = summariseIngest(ingests, byID)
+	for _, q := range byID {
+		if q.Ingest != nil {
+			roles.add("ingest", "", "", q.Ingest.Settings, q.Ingest.Usage)
+		}
+	}
 
 	variants, err := d.Variants()
 	if err != nil {
 		return nil, err
 	}
+	endpoints := map[string]bool{}
 	for _, v := range variants {
-		vr, err := buildVariant(d, v, byID, r)
+		vr, err := buildVariant(d, v, byID, r, primary, roles)
 		if err != nil {
 			return nil, err
 		}
 		r.Variants = append(r.Variants, vr)
+		endpoints[v.Settings.ProviderName()+" "+v.Settings.BaseURL] = true
 	}
+	r.TokensApproximate = len(endpoints) > 1
+	if err := compareJudges(d, r, primary, variants, byID, roles); err != nil {
+		return nil, err
+	}
+	r.Roles = roles.list()
 	for _, q := range qs {
 		r.Questions = append(r.Questions, *byID[q.ID])
 	}
@@ -240,13 +293,13 @@ type key struct {
 	repeat int
 }
 
-func buildVariant(d *run.Dir, v run.Variant, byID map[string]*Question, r *Report) (VariantResult, error) {
+func buildVariant(d *run.Dir, v run.Variant, byID map[string]*Question, r *Report, primary string, roles *roleSet) (VariantResult, error) {
 	vr := VariantResult{Variant: v, Accuracy: map[string]Accuracy{}, ToolCalls: map[string]int{}, ExtensionCalls: map[string]int{}}
 	answers, err := run.Read[run.Answer](d, "answers/"+v.Label)
 	if err != nil {
 		return vr, err
 	}
-	judgments, err := run.Read[run.Judgment](d, "judgments/"+v.Label)
+	judgments, err := run.Read[run.Judgment](d, run.JudgmentStream(primary, v.Label))
 	if err != nil {
 		return vr, err
 	}
@@ -276,6 +329,7 @@ func buildVariant(d *run.Dir, v run.Variant, byID map[string]*Question, r *Repor
 			continue
 		}
 		vr.Answers++
+		roles.add("answer", "", v.Label, v.Settings, a.Output.Usage)
 		o := Outcome{
 			Repeat: a.Repeat, Answer: a.Output.Text, ToolCalls: a.Output.ToolCalls, Retrieved: a.Output.Retrieved,
 			Tokens: map[string]PhaseTokens{"answer": tokens(a.Output.Usage)}, Failure: a.Failure,
@@ -346,4 +400,116 @@ func buildVariant(d *run.Dir, v run.Variant, byID map[string]*Question, r *Repor
 		vr.Accuracy[row] = Wilson(s.sum, int(s.n))
 	}
 	return vr, nil
+}
+
+// roleSet groups model calls by role and settings.
+type roleSet struct {
+	roles     []Role
+	upstreams []map[string]bool
+}
+
+func (rs *roleSet) add(role, judge, variant string, s agent.Settings, u agent.Usage) {
+	b, _ := json.Marshal(s)
+	i := -1
+	for j, r := range rs.roles {
+		rb, _ := json.Marshal(r.Settings)
+		if r.Role == role && r.Judge == judge && string(rb) == string(b) {
+			i = j
+			break
+		}
+	}
+	if i < 0 {
+		rs.roles = append(rs.roles, Role{Role: role, Judge: judge, Settings: s, Upstreams: []string{}})
+		rs.upstreams = append(rs.upstreams, map[string]bool{})
+		i = len(rs.roles) - 1
+	}
+	if variant != "" && !slices.Contains(rs.roles[i].Variants, variant) {
+		rs.roles[i].Variants = append(rs.roles[i].Variants, variant)
+	}
+	for _, up := range u.Upstreams() {
+		rs.upstreams[i][up] = true
+	}
+}
+
+func (rs *roleSet) list() []Role {
+	out := make([]Role, len(rs.roles))
+	for i, r := range rs.roles {
+		for up := range rs.upstreams[i] {
+			r.Upstreams = append(r.Upstreams, up)
+		}
+		sort.Strings(r.Upstreams)
+		out[i] = r
+	}
+	order := map[string]int{"ingest": 0, "answer": 1, "judge": 2}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Role != out[j].Role {
+			return order[out[i].Role] < order[out[j].Role]
+		}
+		return out[i].Judge < out[j].Judge
+	})
+	return out
+}
+
+type verdictKey struct {
+	variant, q string
+	repeat     int
+}
+
+// compareJudges records every judge's settings and upstreams as a role and,
+// for each judge other than the primary, its agreement with the primary on
+// the answers both graded without failure.
+func compareJudges(d *run.Dir, r *Report, primary string, variants []run.Variant, byID map[string]*Question, roles *roleSet) error {
+	judges, err := d.Judges()
+	if err != nil {
+		return err
+	}
+	verdicts := map[string]map[verdictKey]bool{}
+	settings := map[string]*agent.Settings{}
+	for _, label := range judges {
+		verdicts[label] = map[verdictKey]bool{}
+		for _, v := range variants {
+			js, err := run.Read[run.Judgment](d, run.JudgmentStream(label, v.Label))
+			if err != nil {
+				return err
+			}
+			for _, j := range js {
+				roles.add("judge", label, "", j.Settings, j.Verdict.Usage)
+				if j.Failure != "" {
+					continue
+				}
+				if settings[label] == nil {
+					s := j.Settings
+					settings[label] = &s
+				}
+				verdicts[label][verdictKey{v.Label, j.QuestionID, j.Repeat}] = j.Verdict.Correct
+			}
+		}
+	}
+	for _, label := range judges {
+		if label == primary {
+			continue
+		}
+		c := JudgeComparison{Judge: label, Settings: settings[label], Agreement: map[string]Agreement{}}
+		for k, correct := range verdicts[label] {
+			want, ok := verdicts[primary][k]
+			q := byID[k.q]
+			if !ok || q == nil {
+				continue
+			}
+			for _, row := range []string{q.Stratum, OverallRow} {
+				a := c.Agreement[row]
+				a.N++
+				if correct == want {
+					a.Agree++
+				}
+				c.Agreement[row] = a
+			}
+		}
+		for row, a := range c.Agreement {
+			a.Rate = float64(a.Agree) / float64(a.N)
+			c.Agreement[row] = a
+		}
+		r.OtherJudges = append(r.OtherJudges, c)
+	}
+	return nil
 }

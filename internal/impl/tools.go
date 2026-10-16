@@ -5,49 +5,20 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/nodelogicau/particulars-bench/internal/agent"
 	"github.com/nodelogicau/particulars-bench/internal/spec"
 )
 
-// MessagesTool translates an MCP tool to a Messages API tool with its name,
-// description, and input schema unchanged.
-func MessagesTool(t *mcp.Tool) (anthropic.ToolUnionParam, error) {
+// ToolDef returns an MCP tool's name, description, and input schema
+// unchanged, for a provider to render.
+func ToolDef(t *mcp.Tool) (agent.ToolDef, error) {
 	schema, err := SchemaMap(t)
 	if err != nil {
-		return anthropic.ToolUnionParam{}, err
+		return agent.ToolDef{}, err
 	}
-	in := anthropic.ToolInputSchemaParam{ExtraFields: map[string]any{}}
-	for k, v := range schema {
-		switch k {
-		case "type":
-			if v != "object" {
-				return anthropic.ToolUnionParam{}, fmt.Errorf("tool %s: input schema type %v is not object", t.Name, v)
-			}
-		case "properties":
-			in.Properties = v
-		case "required":
-			req, ok := v.([]any)
-			if !ok {
-				return anthropic.ToolUnionParam{}, fmt.Errorf("tool %s: required is not an array", t.Name)
-			}
-			for _, r := range req {
-				s, ok := r.(string)
-				if !ok {
-					return anthropic.ToolUnionParam{}, fmt.Errorf("tool %s: required entry %v is not a string", t.Name, r)
-				}
-				in.Required = append(in.Required, s)
-			}
-		default:
-			in.ExtraFields[k] = v
-		}
-	}
-	tp := anthropic.ToolParam{Name: t.Name, InputSchema: in}
-	if t.Description != "" {
-		tp.Description = anthropic.String(t.Description)
-	}
-	return anthropic.ToolUnionParam{OfTool: &tp}, nil
+	return agent.ToolDef{Name: t.Name, Description: t.Description, Schema: schema}, nil
 }
 
 // SchemaMap returns a tool's input schema as decoded JSON.
@@ -66,15 +37,15 @@ func SchemaMap(t *mcp.Tool) (map[string]any, error) {
 	return m, nil
 }
 
-// MessagesTools translates every tool.
-func MessagesTools(tools []*mcp.Tool) ([]anthropic.ToolUnionParam, error) {
-	out := make([]anthropic.ToolUnionParam, 0, len(tools))
+// ToolDefs returns every tool's definition.
+func ToolDefs(tools []*mcp.Tool) ([]agent.ToolDef, error) {
+	out := make([]agent.ToolDef, 0, len(tools))
 	for _, t := range tools {
-		mt, err := MessagesTool(t)
+		d, err := ToolDef(t)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, mt)
+		out = append(out, d)
 	}
 	return out, nil
 }

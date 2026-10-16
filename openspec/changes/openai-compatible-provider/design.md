@@ -38,7 +38,7 @@ type Conversation interface {
 *Alternative:* a neutral message list converted on every request. It was rejected because the conversion would be lossy (Anthropic thinking blocks, provider-specific fields), and a lossy history changes model behaviour, which is exactly what must not vary.
 
 ### 2. Chat Completions through `openai-go`, base URL configurable
-Use the official `github.com/openai/openai-go` SDK with `option.WithBaseURL`. Chat Completions is what routers and local servers implement; the Responses API is not. The default base URL is `https://api.openai.com/v1`.
+Use the official `github.com/openai/openai-go` SDK (module path `github.com/openai/openai-go/v3`) with `option.WithBaseURL`. Chat Completions is what routers and local servers implement; the Responses API is not. The default base URL is `https://api.openai.com/v1`. The system prompt is one `system` message with the instructions and the phase prompt separated by a blank line, because some local chat templates accept only one. `--max-tokens` is sent as `max_completion_tokens`; `--max-tokens 0` sends none, so that a server wanting `max_tokens` can get it through `--extra-body`. A server error carries the server's message, which the SDK's error text leaves out.
 
 *Alternative:* raw HTTP, rejected; the SDK covers base-URL override, retries, and typed errors.
 
@@ -65,15 +65,18 @@ Each role has a key variable: `ANTHROPIC_API_KEY` for `anthropic`, `OPENAI_API_K
 `input_tokens` = `prompt_tokens` (which includes cached), `cache_read_tokens` = `prompt_tokens_details.cached_tokens`, `output_tokens` = `completion_tokens` (which includes reasoning tokens), and `cache_write_tokens` = 0. Per-call records keep provider-native totals, so cross-provider token comparisons are labelled approximate in the report.
 
 ### 9. Stop reasons
-`finish_reason: tool_calls` continues the loop. `stop` ends it. `length` ends it as capped. `content_filter` is an infrastructure failure, like an Anthropic `refusal`.
+`finish_reason: tool_calls` continues the loop. `stop` ends it. `length` ends it as capped. `content_filter` is an infrastructure failure, like an Anthropic `refusal`. Some servers finish with `stop` while returning tool calls; the calls are answered and the loop continues, since they are what the model asked for. Empty arguments are read as `{}`. The Anthropic adapter keeps its stop handling exactly as before (`max_tokens` is not marked capped).
 
 ### 10. Cache-key encoding unchanged for Anthropic
-`agent.Settings` gains `provider`, `base_url`, and `extra_body`, each omitted from JSON when it holds the Anthropic default. An Anthropic-only ingest therefore hashes exactly as before, and existing cached workspaces stay valid. Any non-default provider setting enters the key.
+`agent.Settings` gains `provider`, `base_url`, `extra_body`, and `temperature` (set only for the `openai` judge), each omitted from JSON when it holds the Anthropic default. An Anthropic-only ingest therefore hashes exactly as before, and existing cached workspaces stay valid. Any non-default provider setting enters the key.
 
 ### 11. Scope: every phase
 The adapter serves ingest, answers, baselines, and the judge. The judge and the baselines are tool-free and low-risk. Agent phases on other providers are what measures whether an implementation's guidance transfers beyond Claude, and the adapter costs the same either way.
 
 *Alternative:* judge and baselines only, rejected; the agent case is what the router reach is for, and limiting it would be an artificial restriction.
+
+### 12. Judgments per judge
+Verdicts go to `judgments/<judge-label>/<variant>.jsonl`, the label defaulting to the judge model id (`--judge-label` overrides it, e.g. for one model through two routers). `report` scores with one primary judge: the one `--judge-label` or `--judge-model` names, else the only one, else the default judge model's. Every other judge is reported with its agreement with the primary per question type, on the answers both graded without failure. Runs from before this change have no paid results, so the old `judgments/<variant>.jsonl` layout is not read.
 
 ## Risks / Trade-offs
 

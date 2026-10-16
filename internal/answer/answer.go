@@ -55,7 +55,7 @@ func Question(q dataset.Question) string {
 // WithMemory serves a copy of the cached workspace for key with im and lets
 // the model answer through the read-only tools. The cached workspace itself
 // is never served.
-func WithMemory(ctx context.Context, m agent.Model, s agent.Settings, im impl.Impl, specOnly bool,
+func WithMemory(ctx context.Context, m agent.Provider, s agent.Settings, im impl.Impl, specOnly bool,
 	cache ingest.Cache, key, tmpRoot string, q dataset.Question) (Output, impl.ServerInfo, []string, error) {
 	tmp, err := os.MkdirTemp(tmpRoot, "answer-")
 	if err != nil {
@@ -71,7 +71,11 @@ func WithMemory(ctx context.Context, m agent.Model, s agent.Settings, im impl.Im
 		return Output{}, impl.ServerInfo{}, nil, err
 	}
 	defer func() { _ = srv.Close() }()
-	tools, extensions := impl.AnswerTools(srv.Tools, specOnly)
+	offered, extensions := impl.AnswerTools(srv.Tools, specOnly)
+	tools, err := impl.ToolDefs(offered)
+	if err != nil {
+		return Output{}, srv.Info, extensions, err
+	}
 	res, err := agent.Run(ctx, m, srv, agent.Request{
 		Settings:     s,
 		Instructions: srv.Instructions,
@@ -85,7 +89,7 @@ func WithMemory(ctx context.Context, m agent.Model, s agent.Settings, im impl.Im
 
 // Baseline answers with one of the baselines; bm25K is the number of
 // sessions BM25 retrieves.
-func Baseline(ctx context.Context, m agent.Model, s agent.Settings, name string, bm25K int, q dataset.Question) (Output, error) {
+func Baseline(ctx context.Context, m agent.Provider, s agent.Settings, name string, bm25K int, q dataset.Question) (Output, error) {
 	var sessions []dataset.Session
 	switch name {
 	case NoMemory:

@@ -88,12 +88,20 @@ type Answer struct {
 
 // Judgment grades one answer.
 type Judgment struct {
+	// Judge labels the judge, so that verdicts from several judges of
+	// the same answers sit side by side.
+	Judge      string         `json:"judge,omitempty"`
 	Variant    string         `json:"variant"`
 	QuestionID string         `json:"question_id"`
 	Repeat     int            `json:"repeat"`
 	Settings   agent.Settings `json:"settings"`
 	Verdict    judge.Verdict  `json:"verdict"`
 	Failure    string         `json:"failure,omitempty"`
+}
+
+// JudgmentStream is the stream of one judge's verdicts on one variant.
+func JudgmentStream(judge, variant string) string {
+	return "judgments/" + judge + "/" + variant
 }
 
 // Dir is a run directory.
@@ -166,8 +174,27 @@ func (d *Dir) Variants() ([]Variant, error) {
 	return out, nil
 }
 
+// Judges lists the labels of the judges with verdicts in the run, sorted.
+func (d *Dir) Judges() ([]string, error) {
+	entries, err := os.ReadDir(d.file("judgments"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, e := range entries {
+		if e.IsDir() {
+			out = append(out, e.Name())
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
 // Reset empties a JSONL stream ("ingest", "answers/<label>",
-// "judgments/<label>") before a phase rewrites it.
+// "judgments/<judge>/<label>") before a phase rewrites it.
 func (d *Dir) Reset(stream string) error {
 	p := d.file(stream + ".jsonl")
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {

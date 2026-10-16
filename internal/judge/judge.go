@@ -29,7 +29,7 @@ func Render(q dataset.Question, response string) (name, prompt string) {
 func Parse(raw string) bool { return strings.Contains(strings.ToLower(raw), "yes") }
 
 // Grade asks the judge model for a verdict.
-func Grade(ctx context.Context, m agent.Model, s agent.Settings, q dataset.Question, response string) (Verdict, error) {
+func Grade(ctx context.Context, m agent.Provider, s agent.Settings, q dataset.Question, response string) (Verdict, error) {
 	name, prompt := Render(q, response)
 	raw, usage, err := agent.Complete(ctx, m, s, "", prompt)
 	return Verdict{Correct: Parse(raw), Prompt: name, Raw: raw, Usage: usage}, err

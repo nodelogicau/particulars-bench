@@ -22,7 +22,7 @@ const PromptName = "ingest"
 type Ingester struct {
 	Cache    Cache
 	Impl     impl.Impl
-	Model    agent.Model
+	Model    agent.Provider
 	Settings agent.Settings
 	// Variant and DatasetSHA256 identify the dataset in the key.
 	Variant       string
@@ -77,6 +77,10 @@ func (in *Ingester) ingest(ctx context.Context, q dataset.Question, inputs KeyIn
 		}
 	}()
 
+	tools, err := impl.ToolDefs(srv.Tools)
+	if err != nil {
+		return nil, err
+	}
 	m := &Manifest{Key: key, Inputs: inputs}
 	claimSession := map[string]string{}
 	known := map[string]bool{}
@@ -86,7 +90,7 @@ func (in *Ingester) ingest(ctx context.Context, q dataset.Question, inputs KeyIn
 			Instructions: srv.Instructions,
 			Phase:        prompts.Get(PromptName),
 			User:         SessionMessage(s),
-			Tools:        srv.Tools,
+			Tools:        tools,
 		})
 		m.Usage.Add(res.Usage)
 		if err != nil {

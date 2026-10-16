@@ -12,6 +12,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/nodelogicau/particulars-bench/internal/agent"
 	"github.com/nodelogicau/particulars-bench/internal/fakeserver"
 	"github.com/nodelogicau/particulars-bench/internal/impl"
 	"github.com/nodelogicau/particulars-bench/internal/spec"
@@ -106,37 +107,68 @@ func TestAnswerToolsFilter(t *testing.T) {
 	}
 }
 
-// assertVerbatim checks that every tool translates to a Messages API tool
-// with the server's name, description, and input schema.
+// assertVerbatim checks that every tool renders, as a Messages API tool and
+// as an OpenAI function, with the server's name, description, and input
+// schema, and with strict mode off.
 func assertVerbatim(t *testing.T, tools []*mcp.Tool) {
 	t.Helper()
 	for _, tool := range tools {
-		mt, err := impl.MessagesTool(tool)
+		def, err := impl.ToolDef(tool)
 		if err != nil {
 			t.Fatalf("%s: %v", tool.Name, err)
-		}
-		b, err := json.Marshal(mt)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var got struct {
-			Name        string         `json:"name"`
-			Description string         `json:"description"`
-			InputSchema map[string]any `json:"input_schema"`
-		}
-		if err := json.Unmarshal(b, &got); err != nil {
-			t.Fatal(err)
 		}
 		want, err := impl.SchemaMap(tool)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got.Name != tool.Name || got.Description != tool.Description {
-			t.Errorf("%s: name/description changed: %q %q", tool.Name, got.Name, got.Description)
+		at, err := agent.AnthropicTool(def)
+		if err != nil {
+			t.Fatalf("%s: %v", tool.Name, err)
 		}
-		if !reflect.DeepEqual(got.InputSchema, want) {
-			t.Errorf("%s: schema changed\n got %v\nwant %v", tool.Name, got.InputSchema, want)
+		var anth struct {
+			Name        string         `json:"name"`
+			Description string         `json:"description"`
+			InputSchema map[string]any `json:"input_schema"`
 		}
+		roundTrip(t, at, &anth)
+		var fn struct {
+			Type     string `json:"type"`
+			Function struct {
+				Name        string         `json:"name"`
+				Description string         `json:"description"`
+				Parameters  map[string]any `json:"parameters"`
+				Strict      *bool          `json:"strict"`
+			} `json:"function"`
+		}
+		roundTrip(t, agent.OpenAITool(def), &fn)
+		for _, got := range []struct {
+			format, name, desc string
+			schema             map[string]any
+		}{
+			{"anthropic", anth.Name, anth.Description, anth.InputSchema},
+			{"openai", fn.Function.Name, fn.Function.Description, fn.Function.Parameters},
+		} {
+			if got.name != tool.Name || got.desc != tool.Description {
+				t.Errorf("%s %s: name/description changed: %q %q", got.format, tool.Name, got.name, got.desc)
+			}
+			if !reflect.DeepEqual(got.schema, want) {
+				t.Errorf("%s %s: schema changed\n got %v\nwant %v", got.format, tool.Name, got.schema, want)
+			}
+		}
+		if fn.Type != "function" || fn.Function.Strict != nil {
+			t.Errorf("openai %s: type %q, strict %v", tool.Name, fn.Type, fn.Function.Strict)
+		}
+	}
+}
+
+func roundTrip(t *testing.T, v, out any) {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, out); err != nil {
+		t.Fatal(err)
 	}
 }
 

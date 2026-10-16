@@ -16,6 +16,8 @@ type Reply struct {
 	Tools []ToolUse
 	// Usage tokens reported for the turn (input, output).
 	In, Out int64
+	// Refuse ends the turn with stop_reason "refusal".
+	Refuse bool
 }
 
 // ToolUse is one scripted tool call.
@@ -24,14 +26,14 @@ type ToolUse struct {
 	Input map[string]any
 }
 
-// Model is a Model whose replies come from Script. It records every request.
+// Model is an agent.Provider, through the Anthropic adapter, whose replies come from Script. It records every request.
 type Model struct {
 	Script func(p anthropic.MessageNewParams) Reply
 	mu     sync.Mutex
 	Calls  []anthropic.MessageNewParams
 }
 
-// New implements agent.Model.
+// New implements agent.MessagesClient.
 func (m *Model) New(_ context.Context, p anthropic.MessageNewParams) (*anthropic.Message, error) {
 	m.mu.Lock()
 	m.Calls = append(m.Calls, p)
@@ -64,6 +66,9 @@ func Message(r Reply, n int) (*anthropic.Message, error) {
 	stop := "end_turn"
 	if len(r.Tools) > 0 {
 		stop = "tool_use"
+	}
+	if r.Refuse {
+		stop = "refusal"
 	}
 	in, out := r.In, r.Out
 	if in == 0 && out == 0 {
