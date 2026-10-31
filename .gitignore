@@ -2,3 +2,6 @@
 /dist/
 .DS_Store
 .idea/
+.envrc
+.env
+.env.*
