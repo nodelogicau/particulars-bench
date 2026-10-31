@@ -114,6 +114,11 @@ type IngestSummary struct {
 	// claims, of the fraction of claims dated on their session's date.
 	MeanOnSessionDate *float64    `json:"mean_on_session_date"`
 	Tokens            PhaseTokens `json:"tokens"`
+	// ToolCalls, ToolErrors, and ToolErrorsByTool are summed over every
+	// question's sessions, those of failed ingests included.
+	ToolCalls        map[string]int `json:"tool_calls"`
+	ToolErrors       int            `json:"tool_errors"`
+	ToolErrorsByTool map[string]int `json:"tool_errors_by_tool"`
 }
 
 // Role is one model role's configuration as sent, and the upstreams that
@@ -231,7 +236,7 @@ func Build(d *run.Dir, meta run.Meta, qs []dataset.Question, now time.Time, prim
 }
 
 func summariseIngest(recs []run.IngestRecord, byID map[string]*Question) IngestSummary {
-	var s IngestSummary
+	s := IngestSummary{ToolCalls: map[string]int{}, ToolErrorsByTool: map[string]int{}}
 	impls := map[string]bool{}
 	var onDate []float64
 	n := 0
@@ -254,6 +259,13 @@ func summariseIngest(recs []run.IngestRecord, byID map[string]*Question) IngestS
 		}
 		s.Tokens.Input += rec.Usage.InputTokens
 		s.Tokens.Output += rec.Usage.OutputTokens
+		for name, c := range rec.ToolCalls {
+			s.ToolCalls[name] += c
+		}
+		for name, c := range rec.ToolErrorsByTool {
+			s.ToolErrorsByTool[name] += c
+		}
+		s.ToolErrors += rec.ToolErrors
 		if rec.Failure != "" || rec.Metrics == nil {
 			s.Failures++
 			continue

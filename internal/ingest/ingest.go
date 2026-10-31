@@ -98,7 +98,7 @@ func (in *Ingester) ingest(ctx context.Context, q dataset.Question, inputs KeyIn
 		}
 		rec := SessionRecord{
 			ID: s.ID, Date: s.Date.Format(time.RFC3339), Turns: res.Turns, Capped: res.Capped,
-			ToolCalls: res.ToolCalls, ToolErrors: res.ToolErrors,
+			ToolCalls: res.ToolCalls, ToolErrors: res.ToolErrors, ToolErrorsByTool: res.ToolErrorsByTool,
 		}
 		ids, err := workspace.ObjectIDs(dir, "claims")
 		if err != nil {

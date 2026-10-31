@@ -142,6 +142,7 @@ func ingestAll(ctx context.Context, o *options, d Deps, l *loaded, im impl.Impl,
 		}
 		if man != nil {
 			rec.Usage = man.Usage
+			rec.ToolCalls, rec.ToolErrorsByTool, rec.ToolErrors = man.ToolCalls()
 		}
 		status := "ingested"
 		if cached {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -123,7 +124,8 @@ func TestDryRunMakesNoCalls(t *testing.T) {
 
 var tsRE = regexp.MustCompile(`Use (\S+) as the timestamp`)
 
-// pipelineModel plays every phase: ingest records a claim per session,
+// pipelineModel plays every phase: ingest records a claim per session (and
+// calls a tool that does not exist),
 // implementations recall then answer, baselines answer, the judge says yes.
 func pipelineModel() *testutil.Model {
 	return &testutil.Model{Script: func(p anthropic.MessageNewParams) testutil.Reply {
@@ -135,7 +137,8 @@ func pipelineModel() *testutil.Model {
 				return testutil.Reply{Text: "recorded"}
 			}
 			return testutil.Reply{Tools: []testutil.ToolUse{{Name: "claim_assert", Input: map[string]any{
-				"particular_id": "The user", "content": "bike", "timestamp": tsRE.FindStringSubmatch(user)[1]}}}}
+				"particular_id": "The user", "content": "bike", "timestamp": tsRE.FindStringSubmatch(user)[1]}},
+				{Name: "particulars_register"}}}
 		case testutil.Has(tools, "knowledge_recall"):
 			if len(p.Messages) > 1 {
 				return testutil.Reply{Text: "red"}
@@ -230,6 +233,26 @@ func TestPipeline(t *testing.T) {
 	}
 	if r.Ingest.MeanOnSessionDate == nil || *r.Ingest.MeanOnSessionDate != 1 {
 		t.Errorf("ingest metrics %+v", r.Ingest)
+	}
+	// The model asserts one claim per session and calls one unknown tool,
+	// an error; cached ingests keep their counts.
+	sessions := 0
+	for _, q := range r.Questions {
+		if q.Ingest == nil || q.Ingest.ToolCalls["claim_assert"] != q.Ingest.Sessions ||
+			q.Ingest.ToolErrors != q.Ingest.Sessions || q.Ingest.ToolErrorsByTool["particulars_register"] != q.Ingest.Sessions {
+			t.Errorf("%s: ingest tool calls %+v", q.ID, q.Ingest)
+			continue
+		}
+		sessions += q.Ingest.Sessions
+	}
+	if len(r.Ingest.ToolCalls) != 2 || r.Ingest.ToolCalls["claim_assert"] != sessions || r.Ingest.ToolErrors != sessions ||
+		len(r.Ingest.ToolErrorsByTool) != 1 || r.Ingest.ToolErrorsByTool["particulars_register"] != sessions {
+		t.Errorf("ingest tool calls %v errors %d by tool %v, want %d each", r.Ingest.ToolCalls, r.Ingest.ToolErrors, r.Ingest.ToolErrorsByTool, sessions)
+	}
+	for _, row := range []string{fmt.Sprintf("| `claim_assert` | %d | 0 |", sessions), fmt.Sprintf("| `particulars_register` | %d | %d |", sessions, sessions)} {
+		if !strings.Contains(md, row) {
+			t.Errorf("report.md has no ingest row %q", row)
+		}
 	}
 	for _, v := range r.Variants {
 		acc := v.Accuracy[report.OverallRow]

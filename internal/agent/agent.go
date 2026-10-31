@@ -166,7 +166,9 @@ type Result struct {
 	Capped     bool           `json:"capped,omitempty"`
 	ToolCalls  map[string]int `json:"tool_calls,omitempty"`
 	ToolErrors int            `json:"tool_errors,omitempty"`
-	Usage      Usage          `json:"usage"`
+	// ToolErrorsByTool counts ToolErrors by tool name.
+	ToolErrorsByTool map[string]int `json:"tool_errors_by_tool,omitempty"`
+	Usage            Usage          `json:"usage"`
 }
 
 // RefusalError is a response the provider declined to give (Anthropic
@@ -194,7 +196,7 @@ type Request struct {
 // not valid JSON go back as an error result without reaching the server; a
 // protocol error ends the loop with an error.
 func Run(ctx context.Context, p Provider, c Caller, req Request) (Result, error) {
-	res := Result{ToolCalls: map[string]int{}}
+	res := Result{ToolCalls: map[string]int{}, ToolErrorsByTool: map[string]int{}}
 	offered := map[string]bool{}
 	for _, t := range req.Tools {
 		offered[t.Name] = true
@@ -235,13 +237,11 @@ func Run(ctx context.Context, p Provider, c Caller, req Request) (Result, error)
 		for _, call := range turn.ToolCalls {
 			res.ToolCalls[call.Name]++
 			if !offered[call.Name] {
-				res.ToolErrors++
 				results = append(results, ToolResult{ID: call.ID, IsError: true,
 					Text: fmt.Sprintf("unknown tool %q: not one of the tools offered", call.Name)})
 				continue
 			}
 			if !json.Valid(call.Args) {
-				res.ToolErrors++
 				results = append(results, ToolResult{ID: call.ID, IsError: true,
 					Text: fmt.Sprintf("invalid tool arguments: not a JSON value: %s", call.Args)})
 				continue
@@ -250,10 +250,14 @@ func Run(ctx context.Context, p Provider, c Caller, req Request) (Result, error)
 			if err != nil {
 				return res, fmt.Errorf("tool %s: %w", call.Name, err)
 			}
-			if isErr {
-				res.ToolErrors++
-			}
 			results = append(results, ToolResult{ID: call.ID, Text: out, IsError: isErr})
+		}
+		// Each call has one result, in order.
+		for i, r := range results {
+			if r.IsError {
+				res.ToolErrors++
+				res.ToolErrorsByTool[turn.ToolCalls[i].Name]++
+			}
 		}
 		if !turn.More || len(results) == 0 {
 			return res, nil

@@ -49,8 +49,9 @@ func TestRunForwardsAndCounts(t *testing.T) {
 	if res.Text != "red" || res.Turns != 2 || res.Capped {
 		t.Errorf("result %+v", res)
 	}
-	if res.ToolCalls["knowledge_recall"] != 1 || res.ToolCalls["fails"] != 1 || res.ToolErrors != 1 {
-		t.Errorf("tool calls %v errors %d", res.ToolCalls, res.ToolErrors)
+	if res.ToolCalls["knowledge_recall"] != 1 || res.ToolCalls["fails"] != 1 || res.ToolErrors != 1 ||
+		len(res.ToolErrorsByTool) != 1 || res.ToolErrorsByTool["fails"] != 1 {
+		t.Errorf("tool calls %v errors %d by tool %v", res.ToolCalls, res.ToolErrors, res.ToolErrorsByTool)
 	}
 	if c.args[0] != `{"query":"bike"}` {
 		t.Errorf("arguments not forwarded: %s", c.args[0])
@@ -141,7 +142,7 @@ func TestRunInvalidArgumentsAreToolErrors(t *testing.T) {
 	if len(c.calls) != 0 {
 		t.Errorf("invalid arguments reached the server: %v", c.calls)
 	}
-	if res.ToolCalls["knowledge_recall"] != 1 || res.ToolErrors != 1 || res.Text != "red" {
+	if res.ToolCalls["knowledge_recall"] != 1 || res.ToolErrors != 1 || res.ToolErrorsByTool["knowledge_recall"] != 1 || res.Text != "red" {
 		t.Errorf("result %+v", res)
 	}
 	if r := p.results[0][0]; r.ID != "1" || !r.IsError || !strings.Contains(r.Text, "invalid tool arguments") {
@@ -162,7 +163,7 @@ func TestRunUnknownToolsAreToolErrors(t *testing.T) {
 	if len(c.calls) != 0 {
 		t.Errorf("unknown tool reached the server: %v", c.calls)
 	}
-	if res.ToolCalls["particulars_register"] != 1 || res.ToolErrors != 1 || res.Text != "red" {
+	if res.ToolCalls["particulars_register"] != 1 || res.ToolErrors != 1 || res.ToolErrorsByTool["particulars_register"] != 1 || res.Text != "red" {
 		t.Errorf("result %+v", res)
 	}
 	if r := p.results[0][0]; r.ID != "1" || !r.IsError || !strings.Contains(r.Text, "unknown tool") {
