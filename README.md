@@ -78,7 +78,8 @@ To compare two builds of one implementation, ingest once and answer with both:
 Each model role (the agent, which ingests and answers, and the judge) names a provider:
 
 - `anthropic` (default): the Anthropic Messages API, key `ANTHROPIC_API_KEY`. `--effort` is
-  sent as `output_config.effort`; the system prompt and tools are marked for prompt caching.
+  sent as `output_config.effort`; the system prompt and tools are marked for prompt caching,
+  and in a loop with tools so is the conversation so far.
 - `openai`: any OpenAI-compatible Chat Completions endpoint at `--base-url` (default
   `https://api.openai.com/v1`), key `OPENAI_API_KEY`. Tools go as functions with the
   server's schema as `parameters`, unchanged, and strict mode off. `--effort` is sent as

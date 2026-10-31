@@ -41,12 +41,18 @@ func anthropicOptions(s Settings, apiKey string) []option.RequestOption {
 }
 
 // Start implements Provider. The system prompt and tools are identical on
-// every turn and are marked for prompt caching.
+// every turn and are marked for prompt caching. With tools, which make a loop
+// of more than one turn, the conversation so far is marked too, since each
+// turn resends it with its tool results; without, it would be written to the
+// cache and never read.
 func (a *Anthropic) Start(s Settings, system []string, user string, tools []ToolDef) (Conversation, error) {
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(s.Model),
 		MaxTokens: s.MaxTokens,
 		Messages:  []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(user))},
+	}
+	if len(tools) > 0 {
+		params.CacheControl = anthropic.NewCacheControlEphemeralParam()
 	}
 	for _, t := range tools {
 		at, err := AnthropicTool(t)

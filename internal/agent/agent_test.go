@@ -65,6 +65,9 @@ func TestRunForwardsAndCounts(t *testing.T) {
 	if first.OutputConfig.Effort != "medium" || first.Model != "claude-opus-5-5" {
 		t.Errorf("settings not sent: %+v", first.OutputConfig)
 	}
+	if first.System[1].CacheControl.Type == "" || m.Calls[1].CacheControl.Type == "" {
+		t.Errorf("cache markers: system %+v, conversation %+v", first.System[1].CacheControl, m.Calls[1].CacheControl)
+	}
 	// Both tool results return in one user message after the assistant turn.
 	second := m.Calls[1]
 	if len(second.Messages) != 3 || len(second.Messages[2].Content) != 2 {
@@ -155,5 +158,9 @@ func TestRunRefusalIsFailure(t *testing.T) {
 	var refusal *agent.RefusalError
 	if !errors.As(err, &refusal) || res.Turns != 1 || res.Usage.Calls != 1 {
 		t.Errorf("refusal: err %v, result %+v", err, res)
+	}
+	// A request without tools is one turn; its conversation is not cached.
+	if m.Calls[0].CacheControl.Type != "" {
+		t.Errorf("conversation cached without tools: %+v", m.Calls[0].CacheControl)
 	}
 }
