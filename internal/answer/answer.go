@@ -42,7 +42,10 @@ type Output struct {
 	Turns     int            `json:"turns"`
 	Capped    bool           `json:"capped,omitempty"`
 	ToolCalls map[string]int `json:"tool_calls,omitempty"`
-	Usage     agent.Usage    `json:"usage"`
+	// ToolErrorSamples keeps the earliest agent.SamplesPerTool errors of
+	// each tool.
+	ToolErrorSamples []agent.ToolErrorSample `json:"tool_error_samples,omitempty"`
+	Usage            agent.Usage             `json:"usage"`
 	// Retrieved lists the session ids a retrieval baseline put in context.
 	Retrieved []string `json:"retrieved,omitempty"`
 }
@@ -83,7 +86,8 @@ func WithMemory(ctx context.Context, m agent.Provider, s agent.Settings, im impl
 		User:         Question(q),
 		Tools:        tools,
 	})
-	return Output{Text: res.Text, Turns: res.Turns, Capped: res.Capped, ToolCalls: res.ToolCalls, Usage: res.Usage},
+	return Output{Text: res.Text, Turns: res.Turns, Capped: res.Capped, ToolCalls: res.ToolCalls,
+			ToolErrorSamples: res.ToolErrorSamples, Usage: res.Usage},
 		srv.Info, extensions, err
 }
 

@@ -141,7 +141,18 @@ func Markdown(r *Report) string {
 		// those before errors were kept by tool have the total only.
 		if len(in.ToolCalls) > 0 {
 			byTool := len(in.ToolErrorsByTool) > 0 || in.ToolErrors == 0
-			fmt.Fprintf(&b, "\nIngest tool calls, %d tool errors in all:\n\n| Tool | Calls | Errors |\n|---|---|---|\n", in.ToolErrors)
+			example := map[string]string{}
+			for _, s := range in.ToolErrorSamples {
+				if _, ok := example[s.Tool]; !ok {
+					example[s.Tool] = s.Error
+				}
+			}
+			fmt.Fprintf(&b, "\nIngest tool calls, %d tool errors in all:\n\n", in.ToolErrors)
+			if len(example) > 0 {
+				b.WriteString("| Tool | Calls | Errors | Example error |\n|---|---|---|---|\n")
+			} else {
+				b.WriteString("| Tool | Calls | Errors |\n|---|---|---|\n")
+			}
 			names := make([]string, 0, len(in.ToolCalls))
 			for n := range in.ToolCalls {
 				names = append(names, n)
@@ -152,7 +163,11 @@ func Markdown(r *Report) string {
 				if byTool {
 					errs = fmt.Sprint(in.ToolErrorsByTool[n])
 				}
-				fmt.Fprintf(&b, "| `%s` | %d | %s |\n", n, in.ToolCalls[n], errs)
+				if len(example) > 0 {
+					fmt.Fprintf(&b, "| `%s` | %d | %s | %s |\n", n, in.ToolCalls[n], errs, oneLine(example[n]))
+				} else {
+					fmt.Fprintf(&b, "| `%s` | %d | %s |\n", n, in.ToolCalls[n], errs)
+				}
 			}
 		}
 	}
@@ -243,6 +258,19 @@ func header(b *strings.Builder, first string, vs []VariantResult) {
 func line(b *strings.Builder, cells []string) {
 	b.WriteString("| " + strings.Join(cells, " | ") + " |\n")
 }
+
+// oneLine renders text for one table cell: one line, no pipes, at most
+// cellRunes characters.
+func oneLine(s string) string {
+	s = strings.Join(strings.Fields(s), " ")
+	s = strings.ReplaceAll(s, "|", `\|`)
+	if r := []rune(s); len(r) > cellRunes {
+		s = string(r[:cellRunes-1]) + "…"
+	}
+	return s
+}
+
+const cellRunes = 120
 
 func counts(m map[string]int) string {
 	if len(m) == 0 {

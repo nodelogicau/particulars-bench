@@ -69,8 +69,10 @@ type Outcome struct {
 	JudgeRaw  string                 `json:"judge_raw,omitempty"`
 	Tokens    map[string]PhaseTokens `json:"tokens"`
 	ToolCalls map[string]int         `json:"tool_calls,omitempty"`
-	Retrieved []string               `json:"retrieved,omitempty"`
-	Failure   string                 `json:"failure,omitempty"`
+	// ToolErrorSamples are the answer's tool errors, as the answer kept them.
+	ToolErrorSamples []agent.ToolErrorSample `json:"tool_error_samples,omitempty"`
+	Retrieved        []string                `json:"retrieved,omitempty"`
+	Failure          string                  `json:"failure,omitempty"`
 }
 
 // Question is one question's results across variants.
@@ -119,6 +121,9 @@ type IngestSummary struct {
 	ToolCalls        map[string]int `json:"tool_calls"`
 	ToolErrors       int            `json:"tool_errors"`
 	ToolErrorsByTool map[string]int `json:"tool_errors_by_tool"`
+	// ToolErrorSamples keeps the earliest agent.SamplesPerTool errors of
+	// each tool across the questions, in the order their records were written.
+	ToolErrorSamples []agent.ToolErrorSample `json:"tool_error_samples,omitempty"`
 }
 
 // Role is one model role's configuration as sent, and the upstreams that
@@ -266,6 +271,7 @@ func summariseIngest(recs []run.IngestRecord, byID map[string]*Question) IngestS
 			s.ToolErrorsByTool[name] += c
 		}
 		s.ToolErrors += rec.ToolErrors
+		s.ToolErrorSamples = agent.AddSamples(s.ToolErrorSamples, rec.ToolErrorSamples...)
 		if rec.Failure != "" || rec.Metrics == nil {
 			s.Failures++
 			continue
@@ -344,7 +350,8 @@ func buildVariant(d *run.Dir, v run.Variant, byID map[string]*Question, r *Repor
 		roles.add("answer", "", v.Label, v.Settings, a.Output.Usage)
 		o := Outcome{
 			Repeat: a.Repeat, Answer: a.Output.Text, ToolCalls: a.Output.ToolCalls, Retrieved: a.Output.Retrieved,
-			Tokens: map[string]PhaseTokens{"answer": tokens(a.Output.Usage)}, Failure: a.Failure,
+			ToolErrorSamples: a.Output.ToolErrorSamples,
+			Tokens:           map[string]PhaseTokens{"answer": tokens(a.Output.Usage)}, Failure: a.Failure,
 		}
 		if q.Ingest != nil && v.Kind == "implementation" {
 			o.Tokens["ingest"] = tokens(q.Ingest.Usage)

@@ -54,11 +54,14 @@ type IngestRecord struct {
 	Usage        agent.Usage     `json:"usage"`
 	// ToolCalls, ToolErrors, and ToolErrorsByTool are summed over the
 	// sessions replayed.
-	ToolCalls        map[string]int     `json:"tool_calls,omitempty"`
-	ToolErrors       int                `json:"tool_errors,omitempty"`
-	ToolErrorsByTool map[string]int     `json:"tool_errors_by_tool,omitempty"`
-	Metrics          *workspace.Metrics `json:"metrics,omitempty"`
-	Failure          string             `json:"failure,omitempty"`
+	ToolCalls        map[string]int `json:"tool_calls,omitempty"`
+	ToolErrors       int            `json:"tool_errors,omitempty"`
+	ToolErrorsByTool map[string]int `json:"tool_errors_by_tool,omitempty"`
+	// ToolErrorSamples keeps the earliest agent.SamplesPerTool errors of
+	// each tool.
+	ToolErrorSamples []agent.ToolErrorSample `json:"tool_error_samples,omitempty"`
+	Metrics          *workspace.Metrics      `json:"metrics,omitempty"`
+	Failure          string                  `json:"failure,omitempty"`
 }
 
 // Variant describes one answering configuration.

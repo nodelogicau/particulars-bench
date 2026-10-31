@@ -249,7 +249,18 @@ func TestPipeline(t *testing.T) {
 		len(r.Ingest.ToolErrorsByTool) != 1 || r.Ingest.ToolErrorsByTool["particulars_register"] != sessions {
 		t.Errorf("ingest tool calls %v errors %d by tool %v, want %d each", r.Ingest.ToolCalls, r.Ingest.ToolErrors, r.Ingest.ToolErrorsByTool, sessions)
 	}
-	for _, row := range []string{fmt.Sprintf("| `claim_assert` | %d | 0 |", sessions), fmt.Sprintf("| `particulars_register` | %d | %d |", sessions, sessions)} {
+	// Each question keeps up to agent.SamplesPerTool of its unknown-tool errors.
+	for _, q := range r.Questions {
+		if s := q.Ingest.ToolErrorSamples; len(s) != min(q.Ingest.Sessions, agent.SamplesPerTool) ||
+			s[0].Tool != "particulars_register" || s[0].Args != "{}" || !strings.Contains(s[0].Error, "unknown tool") {
+			t.Errorf("%s: ingest tool error samples %+v", q.ID, s)
+		}
+	}
+	if len(r.Ingest.ToolErrorSamples) != agent.SamplesPerTool {
+		t.Errorf("ingest summary samples %+v", r.Ingest.ToolErrorSamples)
+	}
+	for _, row := range []string{fmt.Sprintf("| `claim_assert` | %d | 0 |  |", sessions),
+		fmt.Sprintf("| `particulars_register` | %d | %d | unknown tool \"particulars_register\": not one of the tools offered |", sessions, sessions)} {
 		if !strings.Contains(md, row) {
 			t.Errorf("report.md has no ingest row %q", row)
 		}
