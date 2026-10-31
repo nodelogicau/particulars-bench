@@ -119,8 +119,9 @@ Caveats:
   weights, quantisation, or templates. Pin the upstream with `--extra-body` and disable
   fallbacks. When a response names its upstream (OpenRouter's top-level `provider` field), each
   call records it; the report lists each role's upstreams and warns when there was more than one.
-- **Tool calling varies.** Arguments that are not valid JSON go back to the model as an error
-  tool result and count as a call of that tool and a tool error. A tool call written as text
+- **Tool calling varies.** A call of a tool that was not offered, or with arguments that are
+  not valid JSON, goes back to the model as an error tool result without reaching the server,
+  and counts as a call of that tool and a tool error. A tool call written as text
   counts as no call. Both show in the tool-call counts as findings, not crashes.
 - **Tokens.** Token counts come from each provider's tokeniser. The report labels token figures
   approximate when variants used different providers. On `openai`, input tokens include cached

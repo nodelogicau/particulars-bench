@@ -149,6 +149,27 @@ func TestRunInvalidArgumentsAreToolErrors(t *testing.T) {
 	}
 }
 
+func TestRunUnknownToolsAreToolErrors(t *testing.T) {
+	p := &scripted{turns: []agent.Turn{
+		{More: true, ToolCalls: []agent.ToolCall{{ID: "1", Name: "particulars_register", Args: []byte(`{}`)}}},
+		{Text: "red"},
+	}}
+	c := &caller{}
+	res, err := agent.Run(context.Background(), p, c, agent.Request{Settings: agent.Settings{MaxTurns: 5}, User: "Q", Tools: tools})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.calls) != 0 {
+		t.Errorf("unknown tool reached the server: %v", c.calls)
+	}
+	if res.ToolCalls["particulars_register"] != 1 || res.ToolErrors != 1 || res.Text != "red" {
+		t.Errorf("result %+v", res)
+	}
+	if r := p.results[0][0]; r.ID != "1" || !r.IsError || !strings.Contains(r.Text, "unknown tool") {
+		t.Errorf("tool result %+v", r)
+	}
+}
+
 func TestRunRefusalIsFailure(t *testing.T) {
 	m := &testutil.Model{Script: func(anthropic.MessageNewParams) testutil.Reply { return testutil.Reply{Refuse: true} }}
 	res, err := agent.Run(context.Background(), m, &caller{}, agent.Request{Settings: agent.Settings{Model: "m", MaxTurns: 3}, User: "Q"})
