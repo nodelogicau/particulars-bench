@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 // Providers.
@@ -168,7 +169,51 @@ type Result struct {
 	ToolErrors int            `json:"tool_errors,omitempty"`
 	// ToolErrorsByTool counts ToolErrors by tool name.
 	ToolErrorsByTool map[string]int `json:"tool_errors_by_tool,omitempty"`
-	Usage            Usage          `json:"usage"`
+	// ToolErrorSamples are the first SamplesPerTool errors of each tool.
+	ToolErrorSamples []ToolErrorSample `json:"tool_error_samples,omitempty"`
+	Usage            Usage             `json:"usage"`
+}
+
+// SamplesPerTool and SampleBytes bound the tool errors a record keeps.
+const (
+	SamplesPerTool = 3
+	SampleBytes    = 500
+)
+
+// ToolErrorSample is one tool call that failed: the arguments the model sent
+// and the error that went back, each cut to SampleBytes.
+type ToolErrorSample struct {
+	Tool  string `json:"tool"`
+	Args  string `json:"args"`
+	Error string `json:"error"`
+}
+
+// AddSamples appends samples to dst, keeping at most SamplesPerTool of each
+// tool, the earliest first.
+func AddSamples(dst []ToolErrorSample, samples ...ToolErrorSample) []ToolErrorSample {
+	n := map[string]int{}
+	for _, s := range dst {
+		n[s.Tool]++
+	}
+	for _, s := range samples {
+		if n[s.Tool] < SamplesPerTool {
+			n[s.Tool]++
+			dst = append(dst, s)
+		}
+	}
+	return dst
+}
+
+// cut shortens s to at most SampleBytes, on a character boundary.
+func cut(s string) string {
+	if len(s) <= SampleBytes {
+		return s
+	}
+	i := SampleBytes - len("…")
+	for i > 0 && !utf8.RuneStart(s[i]) {
+		i--
+	}
+	return s[:i] + "…"
 }
 
 // RefusalError is a response the provider declined to give (Anthropic
@@ -255,8 +300,11 @@ func Run(ctx context.Context, p Provider, c Caller, req Request) (Result, error)
 		// Each call has one result, in order.
 		for i, r := range results {
 			if r.IsError {
+				call := turn.ToolCalls[i]
 				res.ToolErrors++
-				res.ToolErrorsByTool[turn.ToolCalls[i].Name]++
+				res.ToolErrorsByTool[call.Name]++
+				res.ToolErrorSamples = AddSamples(res.ToolErrorSamples,
+					ToolErrorSample{Tool: call.Name, Args: cut(string(call.Args)), Error: cut(r.Text)})
 			}
 		}
 		if !turn.More || len(results) == 0 {

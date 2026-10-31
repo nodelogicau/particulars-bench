@@ -123,7 +123,9 @@ Caveats:
 - **Tool calling varies.** A call of a tool that was not offered, or with arguments that are
   not valid JSON, goes back to the model as an error tool result without reaching the server,
   and counts as a call of that tool and a tool error. A tool call written as text
-  counts as no call. Both show in the tool-call counts as findings, not crashes.
+  counts as no call. Both show in the tool-call counts as findings, not crashes. Each ingest
+  and answer record keeps its first three errors of each tool, with the arguments sent and
+  the error returned (500 bytes of each), and the report's ingest table quotes one per tool.
 - **Tokens.** Token counts come from each provider's tokeniser. The report labels token figures
   approximate when variants used different providers. On `openai`, input tokens include cached
   tokens (also reported separately), output tokens include reasoning tokens, and cache writes

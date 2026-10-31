@@ -102,8 +102,9 @@ type SessionRecord struct {
 	ToolCalls  map[string]int `json:"tool_calls,omitempty"`
 	ToolErrors int            `json:"tool_errors,omitempty"`
 	// ToolErrorsByTool counts ToolErrors by tool name.
-	ToolErrorsByTool map[string]int `json:"tool_errors_by_tool,omitempty"`
-	Claims           []string       `json:"claims,omitempty"`
+	ToolErrorsByTool map[string]int          `json:"tool_errors_by_tool,omitempty"`
+	ToolErrorSamples []agent.ToolErrorSample `json:"tool_error_samples,omitempty"`
+	Claims           []string                `json:"claims,omitempty"`
 }
 
 // Manifest is written last, after a successful ingest. A cached workspace is
@@ -133,6 +134,16 @@ func (m *Manifest) ToolCalls() (calls, errorsByTool map[string]int, errors int) 
 		errors += s.ToolErrors
 	}
 	return calls, errorsByTool, errors
+}
+
+// ToolErrorSamples gathers the sessions' tool error samples, keeping the
+// earliest agent.SamplesPerTool of each tool.
+func (m *Manifest) ToolErrorSamples() []agent.ToolErrorSample {
+	var out []agent.ToolErrorSample
+	for _, s := range m.Sessions {
+		out = agent.AddSamples(out, s.ToolErrorSamples...)
+	}
+	return out
 }
 
 // Cache is the directory of ingested workspaces.

@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/anthropics/anthropic-sdk-go"
 
@@ -184,5 +186,38 @@ func TestRunRefusalIsFailure(t *testing.T) {
 	// A request without tools is one turn; its conversation is not cached.
 	if m.Calls[0].CacheControl.Type != "" {
 		t.Errorf("conversation cached without tools: %+v", m.Calls[0].CacheControl)
+	}
+}
+
+func TestRunKeepsToolErrorSamples(t *testing.T) {
+	long := `{"query": "` + strings.Repeat("é", 400) + `"}`
+	var calls []agent.ToolCall
+	for i := range 4 {
+		calls = append(calls, agent.ToolCall{ID: fmt.Sprint(i), Name: "fails", Args: []byte(fmt.Sprintf(`{"n": %d}`, i))})
+	}
+	calls = append(calls,
+		agent.ToolCall{ID: "u", Name: "particulars", Args: []byte(`{}`)},
+		agent.ToolCall{ID: "l", Name: "knowledge_recall", Args: []byte(long[:len(long)-1])})
+	p := &scripted{turns: []agent.Turn{{More: true, ToolCalls: calls}, {Text: "red"}}}
+	res, err := agent.Run(context.Background(), p, &caller{}, agent.Request{Settings: agent.Settings{MaxTurns: 5}, User: "Q", Tools: tools})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ToolErrors != 6 || len(res.ToolErrorSamples) != agent.SamplesPerTool+2 {
+		t.Fatalf("errors %d, samples %+v", res.ToolErrors, res.ToolErrorSamples)
+	}
+	// The earliest of each tool are kept, with what was sent and what came back.
+	for i, s := range res.ToolErrorSamples[:agent.SamplesPerTool] {
+		if s.Tool != "fails" || s.Args != fmt.Sprintf(`{"n": %d}`, i) || s.Error != "result of fails" {
+			t.Errorf("sample %d: %+v", i, s)
+		}
+	}
+	if s := res.ToolErrorSamples[agent.SamplesPerTool]; s.Tool != "particulars" || !strings.Contains(s.Error, "unknown tool") {
+		t.Errorf("unknown tool sample %+v", s)
+	}
+	// Long arguments are cut on a character boundary.
+	s := res.ToolErrorSamples[agent.SamplesPerTool+1]
+	if len(s.Args) > agent.SampleBytes || !utf8.ValidString(s.Args) || !strings.HasSuffix(s.Args, "…") {
+		t.Errorf("long arguments: %d bytes, valid %t: %q", len(s.Args), utf8.ValidString(s.Args), s.Args[len(s.Args)-10:])
 	}
 }
