@@ -190,11 +190,15 @@ type Request struct {
 
 // Run drives the loop until the model stops calling tools or MaxTurns model
 // calls have been made. Tool-level errors go back to the model as the server
-// returned them, and arguments that are not valid JSON go back as an error
-// result without reaching the server; a protocol error ends the loop with an
-// error.
+// returned them, and calls of a tool not offered or with arguments that are
+// not valid JSON go back as an error result without reaching the server; a
+// protocol error ends the loop with an error.
 func Run(ctx context.Context, p Provider, c Caller, req Request) (Result, error) {
 	res := Result{ToolCalls: map[string]int{}}
+	offered := map[string]bool{}
+	for _, t := range req.Tools {
+		offered[t.Name] = true
+	}
 	var system []string
 	if req.Instructions != "" {
 		system = append(system, req.Instructions)
@@ -230,6 +234,12 @@ func Run(ctx context.Context, p Provider, c Caller, req Request) (Result, error)
 		var results []ToolResult
 		for _, call := range turn.ToolCalls {
 			res.ToolCalls[call.Name]++
+			if !offered[call.Name] {
+				res.ToolErrors++
+				results = append(results, ToolResult{ID: call.ID, IsError: true,
+					Text: fmt.Sprintf("unknown tool %q: not one of the tools offered", call.Name)})
+				continue
+			}
 			if !json.Valid(call.Args) {
 				res.ToolErrors++
 				results = append(results, ToolResult{ID: call.ID, IsError: true,
