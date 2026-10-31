@@ -43,17 +43,22 @@ type Meta struct {
 
 // IngestRecord is one question's ingest.
 type IngestRecord struct {
-	QuestionID   string             `json:"question_id"`
-	Impl         impl.Impl          `json:"impl"`
-	ServerInfo   impl.ServerInfo    `json:"server_info"`
-	Key          string             `json:"key,omitempty"`
-	Cached       bool               `json:"cached"`
-	Settings     agent.Settings     `json:"settings"`
-	PromptSHA256 string             `json:"prompt_sha256"`
-	Sessions     int                `json:"sessions"`
-	Usage        agent.Usage        `json:"usage"`
-	Metrics      *workspace.Metrics `json:"metrics,omitempty"`
-	Failure      string             `json:"failure,omitempty"`
+	QuestionID   string          `json:"question_id"`
+	Impl         impl.Impl       `json:"impl"`
+	ServerInfo   impl.ServerInfo `json:"server_info"`
+	Key          string          `json:"key,omitempty"`
+	Cached       bool            `json:"cached"`
+	Settings     agent.Settings  `json:"settings"`
+	PromptSHA256 string          `json:"prompt_sha256"`
+	Sessions     int             `json:"sessions"`
+	Usage        agent.Usage     `json:"usage"`
+	// ToolCalls, ToolErrors, and ToolErrorsByTool are summed over the
+	// sessions replayed.
+	ToolCalls        map[string]int     `json:"tool_calls,omitempty"`
+	ToolErrors       int                `json:"tool_errors,omitempty"`
+	ToolErrorsByTool map[string]int     `json:"tool_errors_by_tool,omitempty"`
+	Metrics          *workspace.Metrics `json:"metrics,omitempty"`
+	Failure          string             `json:"failure,omitempty"`
 }
 
 // Variant describes one answering configuration.

@@ -137,6 +137,24 @@ func Markdown(r *Report) string {
 		}
 		fmt.Fprintf(&b, "Implementation %s: %d questions (%d from cache, %d failed). Per workspace, on average: %.1f claims, %.1f particulars, %.1f topics, %.1f syntheses; %s of claims dated on their session's date. Ingest tokens: %d in, %d out.\n",
 			strings.Join(in.Impls, ", "), in.Questions, in.Cached, in.Failures, in.MeanClaims, in.MeanParticular, in.MeanTopics, in.MeanSyntheses, onDate, in.Tokens.Input, in.Tokens.Output)
+		// Records written before ingest tool calls were kept have none, and
+		// those before errors were kept by tool have the total only.
+		if len(in.ToolCalls) > 0 {
+			byTool := len(in.ToolErrorsByTool) > 0 || in.ToolErrors == 0
+			fmt.Fprintf(&b, "\nIngest tool calls, %d tool errors in all:\n\n| Tool | Calls | Errors |\n|---|---|---|\n", in.ToolErrors)
+			names := make([]string, 0, len(in.ToolCalls))
+			for n := range in.ToolCalls {
+				names = append(names, n)
+			}
+			sort.Strings(names)
+			for _, n := range names {
+				errs := "n/a"
+				if byTool {
+					errs = fmt.Sprint(in.ToolErrorsByTool[n])
+				}
+				fmt.Fprintf(&b, "| `%s` | %d | %s |\n", n, in.ToolCalls[n], errs)
+			}
+		}
 	}
 
 	b.WriteString("\n## Variants\n\n")
