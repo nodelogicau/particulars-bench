@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/nodelogicau/particulars-bench/internal/agent"
+	"github.com/nodelogicau/agentloop/agent"
 	"github.com/nodelogicau/particulars-bench/internal/impl"
 	"github.com/nodelogicau/particulars-bench/internal/ingest"
 )

@@ -6,7 +6,7 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.82.0
 	github.com/google/uuid v1.6.0
 	github.com/modelcontextprotocol/go-sdk v1.7.0
-	github.com/openai/openai-go/v3 v3.78.0
+	github.com/nodelogicau/agentloop v0.1.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -18,6 +18,7 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/invopop/jsonschema v0.14.0 // indirect
+	github.com/openai/openai-go/v3 v3.78.0 // indirect
 	github.com/pb33f/ordered-map/v2 v2.3.1 // indirect
 	github.com/segmentio/asm v1.1.3 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect

@@ -9,7 +9,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/nodelogicau/particulars-bench/internal/agent"
+	"github.com/nodelogicau/agentloop/agent"
 	"github.com/nodelogicau/particulars-bench/internal/dataset"
 	"github.com/nodelogicau/particulars-bench/internal/run"
 	"github.com/nodelogicau/particulars-bench/prompts"
@@ -161,6 +161,7 @@ type Report struct {
 	Schema        string            `json:"schema"`
 	Date          time.Time         `json:"date"`
 	HarnessCommit string            `json:"harness_commit"`
+	AgentLoop     string            `json:"agentloop,omitempty"`
 	DKFFormat     string            `json:"dkf_format"`
 	Dataset       run.Dataset       `json:"dataset"`
 	Selection     dataset.Selection `json:"selection"`
@@ -184,7 +185,7 @@ type Report struct {
 // primary judge.
 func Build(d *run.Dir, meta run.Meta, qs []dataset.Question, now time.Time, primary string) (*Report, error) {
 	r := &Report{
-		Schema: Schema, Date: now.UTC(), HarnessCommit: meta.HarnessCommit, DKFFormat: meta.DKFFormat,
+		Schema: Schema, Date: now.UTC(), HarnessCommit: meta.HarnessCommit, AgentLoop: meta.AgentLoop, DKFFormat: meta.DKFFormat,
 		Dataset: meta.Dataset, Selection: meta.Selection, QuestionIDs: meta.QuestionIDs,
 		JudgePrompts: map[string]string{}, JudgeLabel: primary, Roles: []Role{},
 	}
