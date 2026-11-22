@@ -5,7 +5,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/nodelogicau/particulars-bench/internal/agent"
+	"github.com/nodelogicau/agentloop/agent"
 	"github.com/nodelogicau/particulars-bench/internal/dataset"
 	"github.com/nodelogicau/particulars-bench/prompts"
 )

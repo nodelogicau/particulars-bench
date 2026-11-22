@@ -182,4 +182,9 @@ prompts, and can judge with GPT-4o (`--judge-provider openai --judge-model gpt-4
 runs nothing else. Tests use a fake MCP server (`internal/fakeserver`) and a scripted model;
 the reference-CLI test runs when `particulars` is on PATH.
 
+The agent loop, its providers and the MCP client come from
+[agentloop](https://github.com/nodelogicau/agentloop), pinned in `go.mod`; each run's
+`meta.json` and report record the version used. `internal/impl` adds only the DKF adapter
+contract and the answer-phase tool selection on top.
+
 Design and requirements: `openspec/changes/longmemeval-harness/`.

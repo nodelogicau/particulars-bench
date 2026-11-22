@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nodelogicau/particulars-bench/internal/agent"
+	"github.com/nodelogicau/agentloop/agent"
 	"github.com/nodelogicau/particulars-bench/internal/answer"
 	"github.com/nodelogicau/particulars-bench/internal/dataset"
 	"github.com/nodelogicau/particulars-bench/internal/impl"
@@ -33,12 +33,15 @@ type Dataset struct {
 
 // Meta is fixed when a run starts: its dataset and sample.
 type Meta struct {
-	Created       time.Time         `json:"created"`
-	HarnessCommit string            `json:"harness_commit"`
-	DKFFormat     string            `json:"dkf_format"`
-	Dataset       Dataset           `json:"dataset"`
-	Selection     dataset.Selection `json:"selection"`
-	QuestionIDs   []string          `json:"question_ids"`
+	Created       time.Time `json:"created"`
+	HarnessCommit string    `json:"harness_commit"`
+	// AgentLoop is the agentloop module version the agent loop came from,
+	// as built when the run started.
+	AgentLoop   string            `json:"agentloop,omitempty"`
+	DKFFormat   string            `json:"dkf_format"`
+	Dataset     Dataset           `json:"dataset"`
+	Selection   dataset.Selection `json:"selection"`
+	QuestionIDs []string          `json:"question_ids"`
 }
 
 // IngestRecord is one question's ingest.

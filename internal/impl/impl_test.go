@@ -12,7 +12,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/nodelogicau/particulars-bench/internal/agent"
+	"github.com/nodelogicau/agentloop/agent"
 	"github.com/nodelogicau/particulars-bench/internal/fakeserver"
 	"github.com/nodelogicau/particulars-bench/internal/impl"
 	"github.com/nodelogicau/particulars-bench/internal/spec"

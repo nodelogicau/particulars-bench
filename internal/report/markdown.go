@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/nodelogicau/particulars-bench/internal/agent"
+	"github.com/nodelogicau/agentloop/agent"
 )
 
 // Markdown renders the report: variants as columns, question types as rows,
@@ -15,8 +15,8 @@ import (
 func Markdown(r *Report) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# LongMemEval — %s\n\n", r.Date.Format("2006-01-02"))
-	fmt.Fprintf(&b, "Dataset `%s` (`%s`, sha256 `%s`), seed %d, %d questions. DKF format written: `%s`. Harness `%s`.\n",
-		r.Dataset.Variant, r.Dataset.File, short(r.Dataset.SHA256), r.Selection.Seed, len(r.QuestionIDs), r.DKFFormat, short(r.HarnessCommit))
+	fmt.Fprintf(&b, "Dataset `%s` (`%s`, sha256 `%s`), seed %d, %d questions. DKF format written: `%s`. Harness `%s`%s.\n",
+		r.Dataset.Variant, r.Dataset.File, short(r.Dataset.SHA256), r.Selection.Seed, len(r.QuestionIDs), r.DKFFormat, short(r.HarnessCommit), agentloop(r.AgentLoop))
 	if r.Judge != nil {
 		fmt.Fprintf(&b, "Judge %s with LongMemEval's per-type prompts.", model(*r.Judge))
 	}
@@ -293,4 +293,12 @@ func short(s string) string {
 		return s[:12]
 	}
 	return s
+}
+
+// agentloop names the agent loop's module version after the harness commit.
+func agentloop(v string) string {
+	if v == "" {
+		return ""
+	}
+	return ", agentloop " + v
 }

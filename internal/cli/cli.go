@@ -18,7 +18,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nodelogicau/particulars-bench/internal/agent"
+	"github.com/nodelogicau/agentloop/agent"
 	"github.com/nodelogicau/particulars-bench/internal/answer"
 	"github.com/nodelogicau/particulars-bench/internal/dataset"
 	"github.com/nodelogicau/particulars-bench/internal/impl"
@@ -411,7 +411,7 @@ func load(o *options, d Deps, createIfMissing bool) (*loaded, error) {
 		}
 		l.questions = qs
 		l.meta = run.Meta{
-			Created: d.Now().UTC(), HarnessCommit: harnessCommit(), DKFFormat: spec.DKFFormat,
+			Created: d.Now().UTC(), HarnessCommit: harnessCommit(), AgentLoop: agentloopVersion(), DKFFormat: spec.DKFFormat,
 			Dataset:   run.Dataset{Variant: variant, File: f.Name, Repository: dataset.Repository, Revision: dataset.Revision, SHA256: f.SHA256},
 			Selection: o.sel,
 		}
@@ -431,6 +431,22 @@ func load(o *options, d Deps, createIfMissing bool) (*loaded, error) {
 		}
 	}
 	return l, nil
+}
+
+// agentloopVersion is the agentloop module version built in, so that a
+// change of agent loop shows in the run's metadata.
+func agentloopVersion() string {
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		for _, d := range bi.Deps {
+			if d.Path == "github.com/nodelogicau/agentloop" {
+				if d.Replace != nil {
+					return d.Version + " => " + d.Replace.Path + " " + d.Replace.Version
+				}
+				return d.Version
+			}
+		}
+	}
+	return "unknown"
 }
 
 func harnessCommit() string {
